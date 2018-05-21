@@ -76,6 +76,18 @@ typedef struct {
 /* An entry for each system call */
 mytable table[NR_syscalls+1];
 
+// Renaming, because mytable is a bad name (it's actually a row in a table )
+typedef struct TableRow mytable;
+
+TableRow get_row(int syscall){
+	return table[syscall];
+}
+
+// Defining boolean TODO: remove if not used
+// typedef enum {
+// 	false, true
+// } bool;
+
 /* Access to the table and pid lists must be synchronized */
 spinlock_t pidlist_lock = SPIN_LOCK_UNLOCKED;
 spinlock_t calltable_lock = SPIN_LOCK_UNLOCKED;
@@ -115,8 +127,8 @@ static int add_pid_sysc(pid_t pid, int sysc)
  */
 static int del_pid_sysc(pid_t pid, int sysc)
 {
-	struct list_head *i;
-	struct pid_list *ple;
+	struct list_head* i;
+	struct pid_list* ple;
 
 	list_for_each(i, &(table[sysc].my_list)) {
 
@@ -276,6 +288,22 @@ void my_exit_group(int status)
  * - Don't forget to call the original system call, so we allow processes to proceed as normal.
  */
 asmlinkage long interceptor(struct pt_regs reg) {
+	int current_pid = current->pid;
+	int syscall = reg.ax;
+	TableRow row = get_row(syscall); //same as table[syscall]
+	int monitored = row.monitored;
+	
+	switch(monitored) {
+		case 0:
+			return 1;
+		case 1:
+			if (check_pid_monitored(current_pid)) {
+				log_message(current_pid, syscall, reg.bx, reg.cx, reg.dx, reg.si, reg.di, reg.bp)
+			}
+			return 1;
+		case 2:
+			log_message(current_pid, syscall, reg.bx, reg.cx, reg.dx, reg.si, reg.di, reg.bp)
+	}
 
 
 
