@@ -502,7 +502,7 @@ bool is_valid_pid(int pid){
 
 bool is_root() {
 	// TODO check correct way to do this
-	return current_uid().val == 0;
+	return current_uid() == 0;
 }
 
 /**
