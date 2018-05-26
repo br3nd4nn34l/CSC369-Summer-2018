@@ -84,9 +84,10 @@ TableRow* get_row(int syscall){
 }
 
 // Defining boolean
-typedef enum {
-	false, true
-} bool;
+typedef bool int;
+#define true 1
+#define false 0
+
 
 /* Access to the table and pid lists must be synchronized */
 spinlock_t pidlist_lock = SPIN_LOCK_UNLOCKED;
