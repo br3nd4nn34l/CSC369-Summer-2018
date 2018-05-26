@@ -26,7 +26,7 @@ void set_addr_rw(unsigned long addr) {
 	unsigned int level;
 	pte_t *pte = lookup_address(addr, &level);
 
-	if (pte->pte &~ _PAGE_RW) pte->pte |= _PAGE_RW;
+	if (pte->pte & ~_PAGE_RW) pte->pte |= _PAGE_RW;
 
 }
 
@@ -79,14 +79,14 @@ mytable table[NR_syscalls+1];
 // Renaming, because mytable is a bad name (it's actually a row in a table )
 typedef struct TableRow mytable;
 
-TableRow get_row(int syscall){
-	return table[syscall];
+TableRow* get_row(int syscall){
+	return &table[syscall];
 }
 
-// Defining boolean TODO: remove if not used
-// typedef enum {
-// 	false, true
-// } bool;
+// Defining boolean
+typedef enum {
+	false, true
+} bool;
 
 /* Access to the table and pid lists must be synchronized */
 spinlock_t pidlist_lock = SPIN_LOCK_UNLOCKED;
@@ -107,7 +107,7 @@ spinlock_t calltable_lock = SPIN_LOCK_UNLOCKED;
  */
 static int add_pid_sysc(pid_t pid, int sysc)
 {
-	struct pid_list *ple=(struct pid_list*)kmalloc(sizeof(struct pid_list), GFP_KERNEL);
+	struct pid_list* ple=(struct pid_list*)kmalloc(sizeof(struct pid_list), GFP_KERNEL);
 
 	if (!ple)
 		return -ENOMEM;
@@ -289,27 +289,17 @@ void my_exit_group(int status)
  */
 asmlinkage long interceptor(struct pt_regs reg) {
 	int current_pid = current->pid;
-	int syscall = reg.ax;
-	TableRow row = get_row(syscall); //same as table[syscall]
-	int monitored = row.monitored;
-	
-	switch(monitored) {
-		case 0:
-			return 1;
-		case 1:
-			if (check_pid_monitored(current_pid)) {
-				log_message(current_pid, syscall, reg.bx, reg.cx, reg.dx, reg.si, reg.di, reg.bp)
-			}
-			return 1;
-		case 2:
-			log_message(current_pid, syscall, reg.bx, reg.cx, reg.dx, reg.si, reg.di, reg.bp)
+	int syscall_num = reg.ax;
+	TableRow* row = get_row(syscall); //same as table[syscall]
+	int monitored = row->monitored;	
+
+	// Log if we are monitoring current_pid
+	if (is_pid_monitored(current_pid, syscall_num)){
+		log_message(current_pid, syscall_num, reg.bx, reg.cx, reg.dx, reg.si, reg.di, reg.bp);
 	}
-
-
-
-
-
-	return 0; // Just a placeholder, so it compiles with no warnings!
+	
+	// Return the result of the original system call (stored at attribute f)
+	return row->f(reg);
 }
 
 /**
@@ -362,13 +352,157 @@ asmlinkage long interceptor(struct pt_regs reg) {
  *   you might be holding, before you exit the function (including error cases!).  
  */
 asmlinkage long my_syscall(int cmd, int syscall, int pid) {
+	if (!is_valid_cmd(cmd) || !is_valid_syscall(syscall) || !is_valid_pid(pid)) {
+		return -EINVAL;
+	}
+	if (!has_permission(cmd, pid)) {
+		return -EPERM;
+	}
+	if (!is_context_correct(cmd, syscall, pid)) {
+		return -EINVAL;
+	}
+	if (is_busy(cmd, syscall, pid)){
+		return -EBUSY;
+	}
 
+	// cmd is guaranteed to be one of the following if we passed the checks
+	switch(cmd) {
+		case (REQUEST_SYSCALL_INTERCEPT) {
+			return handle_syscall_intercept(syscall, pid);
+		}
+		case (REQUEST_SYSCALL_RELEASE) {
+			return handle_syscall_release(syscall, pid);
+		}
+		case (REQUEST_START_MONITORING) {
+			return handle_start_monitoring(syscall, pid);
+		}
+		case (REQUEST_STOP_MONITORING) {
+			return handle_stop_monitoring(syscall, pid);
+		}
+	}
+}
 
+long handle_syscall_intercept(int syscall, int pid){
+	
+	// store original call to mytable and update intercept
+	spin_lock(&pidlist_lock);
+	TableRow* row = get_row(syscall);
+	row->intercepted = 1;
+	row->f = sys_call_table[syscall];
+	spin_unlock(&pidlist_lock);
 
-
-
+	// replace system call from the kernel sys_call_table
+	spin_lock(&calltable_lock);
+	set_addr_rw(sys_call_table);
+	sys_call_table[syscall] = interceptor;
+	set_addr_ro(sys_call_table);
+	spin_unlock(&calltable_lock);
 
 	return 0;
+}
+
+long handle_syscall_release(int syscall, int pid){
+	// restore orignal system call back to kernel sys_call_tabel
+	TableRow* row = get_row(syscall);
+
+	spin_lock(&calltable_lock);
+	set_addr_rw(sys_call_table);
+	sys_call_table[syscall] = row->f;
+	set_addr_ro(sys_call_table);
+	spin_unlock(&calltable_lock);
+
+	return 0;
+}
+
+long handle_start_monitoring(int syscall, int pid){
+	return 0;
+}
+
+long handle_stop_monitoring(int syscall, int pid){
+	return 0;
+}
+
+bool is_valid_cmd(int cmd){
+	return (cmd == REQUEST_START_MONITORING) || 
+		(cmd == REQUEST_STOP_MONITORING) ||
+		(cmd == REQUEST_SYSCALL_INTERCEPT) ||
+		(cmd == REQUEST_SYSCALL_RELEASE);
+}
+
+bool is_busy(int cmd, int syscall, int pid) {
+	TableRow* my_row = get_row(syscall);
+	if (cmd == REQUEST_SYSCALL_INTERCEPT && my_row->intercepted) {
+		return true;
+	}
+	if (cmd == REQUEST_START_MONITORING && is_pid_monitored(pid, syscall)) {
+		return true;
+	}
+}
+
+bool is_pid_monitored(int pid, int syscall_num){
+	TableRow* row = get_row(syscall_num);
+	switch(row->monitored){
+		case 0:
+			return false;
+		case 1:
+			return check_pid_monitored(pid);
+		case 2:
+			return true;
+	}
+}
+
+
+bool is_context_correct(int cmd, int syscall, int pid) {
+	TableRow* my_row = get_row(syscall);
+	if (cmd == REQUEST_SYSCALL_RELEASE && !my_row->intercepted) {
+		return false;
+	}
+	if (cmd == REQUEST_STOP_MONITORING) {
+
+		if (!is_pid_monitored(pid, syscall)){
+			return false;
+		}
+
+		if (!my_row->intercepted){
+			return false;
+		}
+
+	}
+	return true;
+}
+
+bool has_permissions(int cmd, int pid){
+
+	// If we are root, we have permission
+	if (is_root()){
+		return true;
+	}
+
+	// Consider monitoring requests
+	if (cmd == REQUEST_START_MONITORING || cmd == REQUEST_STOP_MONITORING){
+		if (check_pid_from_list(current->pid, pid) == 0) {
+			return true;
+		} else if (pid == 0) {
+			return false;
+		}
+	}
+
+}
+
+bool is_valid_syscall(int syscall) {
+	return (syscall >= 0) && 
+		(syscall <= NR_syscalls) && 
+		(syscall != MY_CUSTOM_SYSCALL);
+}
+
+bool is_valid_pid(int pid){
+	// TODO : PLACEHOLDER
+	return true;
+}
+
+bool is_root() {
+	// TODO check correct way to do this
+	return current_uid().val == 0;
 }
 
 /**
