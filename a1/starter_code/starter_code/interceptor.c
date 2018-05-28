@@ -77,22 +77,32 @@ typedef struct {
 mytable table[NR_syscalls+1];
 
 // Renaming, because mytable is a bad name (it's actually a row in a table )
-typedef struct TableRow mytable;
+typedef mytable TableRow;
 
 TableRow* get_row(int syscall){
 	return &table[syscall];
 }
-
-// Defining boolean
-typedef bool int;
-#define true 1
-#define false 0
 
 
 /* Access to the table and pid lists must be synchronized */
 spinlock_t pidlist_lock = SPIN_LOCK_UNLOCKED;
 spinlock_t calltable_lock = SPIN_LOCK_UNLOCKED;
 //-------------------------------------------------------------
+
+/* helper functions */
+bool is_valid_cmd(int cmd);
+bool is_busy(int cmd, int syscall, int pid);
+bool is_pid_monitored(int pid, int syscall_num);
+bool is_context_correct(int cmd, int syscall, int pid);
+bool has_permissions(int cmd, int pid);
+bool is_valid_syscall(int syscall);
+bool is_valid_pid(int pid);
+bool is_root(void);
+long handle_syscall_intercept(int syscall, int pid);
+long handle_syscall_release(int syscall, int pid);
+long handle_start_monitoring(int syscall, int pid);
+long handle_stop_monitoring(int syscall, int pid);
+
 
 
 //----------LIST OPERATIONS------------------------------------
@@ -262,11 +272,13 @@ void (*orig_exit_group)(int);
  * The exiting process's PID can be retrieved using the current variable (current->pid).
  * Don't forget to call the original exit_group.
  */
-void my_exit_group(int status)
-{
+void my_exit_group(int status){
 
+	spin_lock(&pidlist_lock);
+	del_pid(current->pid);
+	spin_unlock(&pidlist_lock);
 
-
+	orig_exit_group(status);
 }
 //----------------------------------------------------------------
 
@@ -291,8 +303,7 @@ void my_exit_group(int status)
 asmlinkage long interceptor(struct pt_regs reg) {
 	int current_pid = current->pid;
 	int syscall_num = reg.ax;
-	TableRow* row = get_row(syscall); //same as table[syscall]
-	int monitored = row->monitored;	
+	TableRow* row = get_row(syscall_num); //same as table[syscall]
 
 	// Log if we are monitoring current_pid
 	if (is_pid_monitored(current_pid, syscall_num)){
@@ -356,7 +367,7 @@ asmlinkage long my_syscall(int cmd, int syscall, int pid) {
 	if (!is_valid_cmd(cmd) || !is_valid_syscall(syscall) || !is_valid_pid(pid)) {
 		return -EINVAL;
 	}
-	if (!has_permission(cmd, pid)) {
+	if (!has_permissions(cmd, pid)) {
 		return -EPERM;
 	}
 	if (!is_context_correct(cmd, syscall, pid)) {
@@ -368,21 +379,23 @@ asmlinkage long my_syscall(int cmd, int syscall, int pid) {
 
 	// cmd is guaranteed to be one of the following if we passed the checks
 	switch(cmd) {
-		case (REQUEST_SYSCALL_INTERCEPT) {
+		case (REQUEST_SYSCALL_INTERCEPT): {
 			return handle_syscall_intercept(syscall, pid);
 		}
-		case (REQUEST_SYSCALL_RELEASE) {
+		case (REQUEST_SYSCALL_RELEASE): {
 			return handle_syscall_release(syscall, pid);
 		}
-		case (REQUEST_START_MONITORING) {
+		case (REQUEST_START_MONITORING): {
 			return handle_start_monitoring(syscall, pid);
 		}
-		case (REQUEST_STOP_MONITORING) {
+		case (REQUEST_STOP_MONITORING): {
 			return handle_stop_monitoring(syscall, pid);
 		}
 	}
 }
 
+
+/* handlers for my_syscall */
 long handle_syscall_intercept(int syscall, int pid){
 	
 	// store original call to mytable and update intercept
@@ -394,22 +407,23 @@ long handle_syscall_intercept(int syscall, int pid){
 
 	// replace system call from the kernel sys_call_table
 	spin_lock(&calltable_lock);
-	set_addr_rw(sys_call_table);
+	set_addr_rw(&sys_call_table);
 	sys_call_table[syscall] = interceptor;
-	set_addr_ro(sys_call_table);
+	set_addr_ro(&sys_call_table);
 	spin_unlock(&calltable_lock);
 
 	return 0;
 }
+
 
 long handle_syscall_release(int syscall, int pid){
 	// restore orignal system call back to kernel sys_call_tabel
 	TableRow* row = get_row(syscall);
 
 	spin_lock(&calltable_lock);
-	set_addr_rw(sys_call_table);
+	set_addr_rw(&sys_call_table);
 	sys_call_table[syscall] = row->f;
-	set_addr_ro(sys_call_table);
+	set_addr_ro(&sys_call_table);
 	spin_unlock(&calltable_lock);
 
 	return 0;
@@ -446,7 +460,7 @@ bool is_pid_monitored(int pid, int syscall_num){
 		case 0:
 			return false;
 		case 1:
-			return check_pid_monitored(pid);
+			return check_pid_monitored(syscall_num, pid);
 		case 2:
 			return true;
 	}
@@ -497,12 +511,25 @@ bool is_valid_syscall(int syscall) {
 }
 
 bool is_valid_pid(int pid){
-	// TODO : PLACEHOLDER
-	return true;
+	
+	// pid cannot be negative
+	if (pid < 0) {
+		return false;
+	}
+
+	// pid is 0 -> everything can be monitored
+	if (pid == 0){
+		return true;
+	}
+
+	// Return whether pid exists (if the find result is not null)
+	if (pid > 0) {
+		return pid_task(find_vpid(pid), PIDTYPE_PID) != NULL;
+	}
+
 }
 
 bool is_root() {
-	// TODO check correct way to do this
 	return current_uid() == 0;
 }
 
@@ -528,15 +555,31 @@ long (*orig_custom_syscall)(void);
  * - Ensure synchronization as needed.
  */
 static int init_function(void) {
+	spin_lock(&calltable_lock);
 
+	set_addr_rw(&calltable_lock);
+	orig_custom_syscall = sys_call_table[MY_CUSTOM_SYSCALL];
+	orig_exit_group = sys_call_table[__NR_exit_group];
+	// hijacking kernel system call table
+	sys_call_table[MY_CUSTOM_SYSCALL] = my_syscall;
+	sys_call_table[__NR_exit_group] = my_exit_group;
+	set_addr_ro(&calltable_lock);
 
+	spin_lock(&pidlist_lock); 
+	int i;
+	for (i = 0; i < NR_syscalls + 1; i++) {
+		table[i].f = sys_call_table[i];
+		table[i].intercepted = 0;
+		table[i].monitored =0;
+		table[i].listcount=0;
+		INIT_LIST_HEAD(&table[i].my_list);
+	}
+	spin_unlock(&pidlist_lock);
 
-
-
-
-
+	spin_unlock(&calltable_lock);
 	return 0;
 }
+
 
 /**
  * Module exits. 
@@ -548,14 +591,29 @@ static int init_function(void) {
  *   then set it back to read only once done.
  * - Ensure synchronization, if needed.
  */
-static void exit_function(void)
-{        
+static void exit_function(void) {
+	spin_lock(&calltable_lock);
+	set_addr_rw(&calltable_lock);
+	spin_lock(&pidlist_lock);
 
+	// For each row:
+	int i;
+	for (i = 0; i < NR_syscalls + 1; i++){
+		// Restore original systemcall to table
+		sys_call_table[i] = get_row(i)->f;
 
+		// Delete lists for each row
+		destroy_list(i);
+	}
 
+	sys_call_table[MY_CUSTOM_SYSCALL] = orig_custom_syscall;
+	sys_call_table[__NR_exit_group] = orig_exit_group;
+	
+	spin_unlock(&pidlist_lock);
+	set_addr_ro(&calltable_lock);
+	spin_unlock(&calltable_lock);
 
-
-
+	return 0;
 }
 
 module_init(init_function);
