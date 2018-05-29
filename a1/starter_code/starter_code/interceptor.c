@@ -392,6 +392,7 @@ asmlinkage long my_syscall(int cmd, int syscall, int pid) {
 			return handle_stop_monitoring(syscall, pid);
 		}
 	}
+	return 1;
 }
 
 
@@ -407,9 +408,9 @@ long handle_syscall_intercept(int syscall, int pid){
 
 	// replace system call from the kernel sys_call_table
 	spin_lock(&calltable_lock);
-	set_addr_rw(&sys_call_table);
+	set_addr_rw(sys_call_table);
 	sys_call_table[syscall] = interceptor;
-	set_addr_ro(&sys_call_table);
+	set_addr_ro(sys_call_table);
 	spin_unlock(&calltable_lock);
 
 	return 0;
@@ -420,10 +421,14 @@ long handle_syscall_release(int syscall, int pid){
 	// restore orignal system call back to kernel sys_call_tabel
 	TableRow* row = get_row(syscall);
 
+	spin_lock(&pidlist_lock);
+	row->intercepted = 0;
+	spin_unlock(&pidlist_lock);
+
 	spin_lock(&calltable_lock);
-	set_addr_rw(&sys_call_table);
+	set_addr_rw(sys_call_table);
 	sys_call_table[syscall] = row->f;
-	set_addr_ro(&sys_call_table);
+	set_addr_ro(sys_call_table);
 	spin_unlock(&calltable_lock);
 
 	return 0;
@@ -452,6 +457,7 @@ bool is_busy(int cmd, int syscall, int pid) {
 	if (cmd == REQUEST_START_MONITORING && is_pid_monitored(pid, syscall)) {
 		return true;
 	}
+	return false;
 }
 
 bool is_pid_monitored(int pid, int syscall_num){
@@ -464,6 +470,7 @@ bool is_pid_monitored(int pid, int syscall_num){
 		case 2:
 			return true;
 	}
+	return false;
 }
 
 
@@ -501,13 +508,16 @@ bool has_permissions(int cmd, int pid){
 			return false;
 		}
 	}
-
+	return false;
 }
 
 bool is_valid_syscall(int syscall) {
-	return (syscall >= 0) && 
+	if ((syscall >= 0) && 
 		(syscall <= NR_syscalls) && 
-		(syscall != MY_CUSTOM_SYSCALL);
+		(syscall != MY_CUSTOM_SYSCALL)) {
+			return true;
+		}
+	return false;
 }
 
 bool is_valid_pid(int pid){
@@ -520,13 +530,13 @@ bool is_valid_pid(int pid){
 	// pid is 0 -> everything can be monitored
 	if (pid == 0){
 		return true;
-	}
+	}		
 
 	// Return whether pid exists (if the find result is not null)
 	if (pid > 0) {
 		return pid_task(find_vpid(pid), PIDTYPE_PID) != NULL;
 	}
-
+	return true;
 }
 
 bool is_root() {
@@ -557,13 +567,13 @@ long (*orig_custom_syscall)(void);
 static int init_function(void) {
 	spin_lock(&calltable_lock);
 
-	set_addr_rw(&calltable_lock);
+	set_addr_rw(sys_call_table);
 	orig_custom_syscall = sys_call_table[MY_CUSTOM_SYSCALL];
 	orig_exit_group = sys_call_table[__NR_exit_group];
 	// hijacking kernel system call table
 	sys_call_table[MY_CUSTOM_SYSCALL] = my_syscall;
 	sys_call_table[__NR_exit_group] = my_exit_group;
-	set_addr_ro(&calltable_lock);
+	set_addr_ro(sys_call_table);
 
 	spin_lock(&pidlist_lock); 
 	int i;
@@ -593,7 +603,7 @@ static int init_function(void) {
  */
 static void exit_function(void) {
 	spin_lock(&calltable_lock);
-	set_addr_rw(&calltable_lock);
+	set_addr_rw(sys_call_table);
 	spin_lock(&pidlist_lock);
 
 	// For each row:
@@ -610,7 +620,7 @@ static void exit_function(void) {
 	sys_call_table[__NR_exit_group] = orig_exit_group;
 	
 	spin_unlock(&pidlist_lock);
-	set_addr_ro(&calltable_lock);
+	set_addr_ro(sys_call_table);
 	spin_unlock(&calltable_lock);
 
 	return 0;
