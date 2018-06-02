@@ -364,47 +364,56 @@ asmlinkage long interceptor(struct pt_regs reg) {
  *   you might be holding, before you exit the function (including error cases!).  
  */
 asmlinkage long my_syscall(int cmd, int syscall, int pid) {
+	int result = 1;
+	spin_lock(&pidlist_lock);
+
 	if (!is_valid_cmd(cmd) || !is_valid_syscall(syscall) || !is_valid_pid(pid)) {
-		return -EINVAL;
+		result = -EINVAL;
 	}
-	if (!has_permissions(cmd, pid)) {
-		return -EPERM;
+	else if (!has_permissions(cmd, pid)) {
+		result = -EPERM;
 	}
-	if (!is_context_correct(cmd, syscall, pid)) {
-		return -EINVAL;
+	else if (!is_context_correct(cmd, syscall, pid)) {
+		result = -EINVAL;
 	}
-	if (is_busy(cmd, syscall, pid)){
-		return -EBUSY;
+	else if (is_busy(cmd, syscall, pid)){
+		result = -EBUSY;
+	} else {
+		// cmd is guaranteed to be one of the following if we passed the checks
+		switch(cmd) {
+			case (REQUEST_SYSCALL_INTERCEPT): {
+				result = handle_syscall_intercept(syscall, pid);
+				break;
+			}
+			case (REQUEST_SYSCALL_RELEASE): {
+				result = handle_syscall_release(syscall, pid);
+				break;
+			}
+			case (REQUEST_START_MONITORING): {
+				result = handle_start_monitoring(syscall, pid);
+				break;
+			}
+			case (REQUEST_STOP_MONITORING): {
+				result = handle_stop_monitoring(syscall, pid);
+				break;
+			}
+		}
 	}
 
-	// cmd is guaranteed to be one of the following if we passed the checks
-	switch(cmd) {
-		case (REQUEST_SYSCALL_INTERCEPT): {
-			return handle_syscall_intercept(syscall, pid);
-		}
-		case (REQUEST_SYSCALL_RELEASE): {
-			return handle_syscall_release(syscall, pid);
-		}
-		case (REQUEST_START_MONITORING): {
-			return handle_start_monitoring(syscall, pid);
-		}
-		case (REQUEST_STOP_MONITORING): {
-			return handle_stop_monitoring(syscall, pid);
-		}
-	}
-	return 1;
+	spin_unlock(&pidlist_lock);
+	return result;
 }
 
 
 /* handlers for my_syscall */
+
+// Assumes that syscall and pid are safe to use
 long handle_syscall_intercept(int syscall, int pid){
 	
 	// store original call to mytable and update intercept
-	spin_lock(&pidlist_lock);
 	TableRow* row = get_row(syscall);
 	row->intercepted = 1;
 	row->f = sys_call_table[syscall];
-	spin_unlock(&pidlist_lock);
 
 	// replace system call from the kernel sys_call_table
 	spin_lock(&calltable_lock);
@@ -416,14 +425,12 @@ long handle_syscall_intercept(int syscall, int pid){
 	return 0;
 }
 
-
+// Assumes that syscall and pid are safe to use
 long handle_syscall_release(int syscall, int pid){
 	// restore orignal system call back to kernel sys_call_tabel
 	TableRow* row = get_row(syscall);
 
-	spin_lock(&pidlist_lock);
 	row->intercepted = 0;
-	spin_unlock(&pidlist_lock);
 
 	spin_lock(&calltable_lock);
 	set_addr_rw(sys_call_table);
@@ -434,11 +441,63 @@ long handle_syscall_release(int syscall, int pid){
 	return 0;
 }
 
-long handle_start_monitoring(int syscall, int pid){
+// Assumes that syscall and pid are safe to use
+long handle_start_monitoring(int syscall, int pid) {
+	TableRow* row = get_row(syscall);
+	
+	// Whenever pid is 0 and we start monitoring
+	if (pid == 0) {
+
+		// We need to destroy the whitelist OR blacklist, we can't be selective
+		destroy_list(syscall);
+
+		// We need to indicate we're monitoring everything
+		row->monitored = 2;
+		
+		
+		return 0;
+	}
+
+	else if (row->monitored == 2) {
+		return del_pid_sysc(pid, syscall);
+	} 
+	else if (row->monitored == 1 || row->monitored == 0) {
+
+		// Check if we succeeded in adding pid to the list of monitored syscalls
+		int add_pid_status = add_pid_sysc(pid, syscall);
+
+		// If adding was successful, set monitored to 1
+		if (add_pid_status == 0){
+			row->monitored = 1;
+		}
+
+		return add_pid_status;
+	}
+	
 	return 0;
 }
 
+// Assumes that syscall and pid are safe to use
 long handle_stop_monitoring(int syscall, int pid){
+	TableRow* row = get_row(syscall);
+
+	// Stop monitoring all pids -> destroy list and mark as unmonitored
+	if (pid == 0) {
+		destroy_list(syscall);
+		row->monitored = 0;
+	}
+
+	else if (row->monitored == 2) {
+		// return the result of adding the specific pid to the blacklist
+		return add_pid_sysc(pid, syscall);
+	}
+
+	// At this point monitored is 1 (0 would fail safety checks)
+	else {
+		int del_pid_status = del_pid_sysc(pid, syscall);
+		return del_pid_status;
+	}
+
 	return 0;
 }
 
@@ -450,13 +509,27 @@ bool is_valid_cmd(int cmd){
 }
 
 bool is_busy(int cmd, int syscall, int pid) {
-	TableRow* my_row = get_row(syscall);
-	if (cmd == REQUEST_SYSCALL_INTERCEPT && my_row->intercepted) {
+	TableRow* row = get_row(syscall);
+
+	// Trying to intercept an already intercepted syscall -> busy
+	if (cmd == REQUEST_SYSCALL_INTERCEPT && row->intercepted) {
 		return true;
 	}
-	if (cmd == REQUEST_START_MONITORING && is_pid_monitored(pid, syscall)) {
-		return true;
+
+	// Trying to monitor an already monitored pid -> busy
+	if (cmd == REQUEST_START_MONITORING) {
+		
+		// Trying to monitor all PIDs when everything is being monitored
+		if (pid == 0 && row->monitored == 2 && row->listcount == 0) {
+			return true;
+		}
+
+		// Trying to monitor a specific PID
+		if (is_pid_monitored(pid, syscall)){
+			return true;
+		}
 	}
+
 	return false;
 }
 
@@ -467,29 +540,44 @@ bool is_pid_monitored(int pid, int syscall_num){
 			return false;
 		case 1:
 			return check_pid_monitored(syscall_num, pid);
+		// when monitored=2, pid list is used as a black list
+		// pids in the pid list are not monitored
 		case 2:
-			return true;
+			return !check_pid_monitored(syscall_num, pid);;
 	}
 	return false;
 }
 
 
 bool is_context_correct(int cmd, int syscall, int pid) {
-	TableRow* my_row = get_row(syscall);
-	if (cmd == REQUEST_SYSCALL_RELEASE && !my_row->intercepted) {
+	TableRow* row = get_row(syscall);
+
+	// Trying to release an un-intercepted pid -> fail
+	if (cmd == REQUEST_SYSCALL_RELEASE && !row->intercepted) {
 		return false;
 	}
-	if (cmd == REQUEST_STOP_MONITORING) {
 
+
+	if (cmd == REQUEST_STOP_MONITORING) {
+		
+		// Want to stop monitoring all pids
+		if (pid == 0){
+
+			// If we are monitoring something, then we can stop monitoring
+			return row->monitored != 0;
+		}
+
+		// Trying to stop monitoring an unmonitored pid -> fail
 		if (!is_pid_monitored(pid, syscall)){
 			return false;
 		}
 
-		if (!my_row->intercepted){
+		// Trying to stop monitoring for an unintercepted syscall -> fail
+		if (!row->intercepted){
 			return false;
 		}
-
 	}
+
 	return true;
 }
 
@@ -499,15 +587,20 @@ bool has_permissions(int cmd, int pid){
 	if (is_root()){
 		return true;
 	}
-
 	// Consider monitoring requests
-	if (cmd == REQUEST_START_MONITORING || cmd == REQUEST_STOP_MONITORING){
-		if (check_pid_from_list(current->pid, pid) == 0) {
-			return true;
-		} else if (pid == 0) {
+	else if (cmd == REQUEST_START_MONITORING || cmd == REQUEST_STOP_MONITORING){
+		
+		// We cannot be root user, so we don't have permission to call with pid = 0
+		if (pid == 0){
 			return false;
+		} 
+
+		// Otherwise, see if the current process owns the other process
+		if (check_pid_from_list(pid, current->pid) == 0) {
+			return true;
 		}
 	}
+
 	return false;
 }
 
@@ -585,7 +678,6 @@ static int init_function(void) {
 		INIT_LIST_HEAD(&table[i].my_list);
 	}
 	spin_unlock(&pidlist_lock);
-
 	spin_unlock(&calltable_lock);
 	return 0;
 }
@@ -622,8 +714,6 @@ static void exit_function(void) {
 	spin_unlock(&pidlist_lock);
 	set_addr_ro(sys_call_table);
 	spin_unlock(&calltable_lock);
-
-	return 0;
 }
 
 module_init(init_function);
