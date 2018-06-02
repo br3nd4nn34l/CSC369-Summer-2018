@@ -301,8 +301,8 @@ void my_exit_group(int status){
  * - Don't forget to call the original system call, so we allow processes to proceed as normal.
  */
 asmlinkage long interceptor(struct pt_regs reg) {
-	int current_pid = current->pid;
-	int syscall_num = reg.ax;
+	unsigned int current_pid = current->pid;
+	long unsigned int syscall_num = reg.ax;
 	TableRow* row = get_row(syscall_num); //same as table[syscall]
 
 	// Log if we are monitoring current_pid
@@ -417,9 +417,9 @@ long handle_syscall_intercept(int syscall, int pid){
 
 	// replace system call from the kernel sys_call_table
 	spin_lock(&calltable_lock);
-	set_addr_rw(sys_call_table);
+	set_addr_rw((unsigned long) sys_call_table);
 	sys_call_table[syscall] = interceptor;
-	set_addr_ro(sys_call_table);
+	set_addr_ro((unsigned long) sys_call_table);
 	spin_unlock(&calltable_lock);
 
 	return 0;
@@ -433,9 +433,9 @@ long handle_syscall_release(int syscall, int pid){
 	row->intercepted = 0;
 
 	spin_lock(&calltable_lock);
-	set_addr_rw(sys_call_table);
+	set_addr_rw((unsigned long) sys_call_table);
 	sys_call_table[syscall] = row->f;
-	set_addr_ro(sys_call_table);
+	set_addr_ro((unsigned long) sys_call_table);
 	spin_unlock(&calltable_lock);
 
 	return 0;
@@ -589,7 +589,7 @@ bool has_permissions(int cmd, int pid){
 	}
 	// Consider monitoring requests
 	else if (cmd == REQUEST_START_MONITORING || cmd == REQUEST_STOP_MONITORING){
-		
+
 		// We cannot be root user, so we don't have permission to call with pid = 0
 		if (pid == 0){
 			return false;
@@ -658,18 +658,18 @@ long (*orig_custom_syscall)(void);
  * - Ensure synchronization as needed.
  */
 static int init_function(void) {
+	int i = 0;
 	spin_lock(&calltable_lock);
 
-	set_addr_rw(sys_call_table);
+	set_addr_rw((unsigned long) sys_call_table);
 	orig_custom_syscall = sys_call_table[MY_CUSTOM_SYSCALL];
 	orig_exit_group = sys_call_table[__NR_exit_group];
 	// hijacking kernel system call table
 	sys_call_table[MY_CUSTOM_SYSCALL] = my_syscall;
 	sys_call_table[__NR_exit_group] = my_exit_group;
-	set_addr_ro(sys_call_table);
+	set_addr_ro((unsigned long) sys_call_table);
 
 	spin_lock(&pidlist_lock); 
-	int i;
 	for (i = 0; i < NR_syscalls + 1; i++) {
 		table[i].f = sys_call_table[i];
 		table[i].intercepted = 0;
@@ -694,12 +694,12 @@ static int init_function(void) {
  * - Ensure synchronization, if needed.
  */
 static void exit_function(void) {
+	int i = 0;
 	spin_lock(&calltable_lock);
-	set_addr_rw(sys_call_table);
+	set_addr_rw((unsigned long) sys_call_table);
 	spin_lock(&pidlist_lock);
 
 	// For each row:
-	int i;
 	for (i = 0; i < NR_syscalls + 1; i++){
 		// Restore original systemcall to table
 		sys_call_table[i] = get_row(i)->f;
@@ -712,7 +712,7 @@ static void exit_function(void) {
 	sys_call_table[__NR_exit_group] = orig_exit_group;
 	
 	spin_unlock(&pidlist_lock);
-	set_addr_ro(sys_call_table);
+	set_addr_ro((unsigned long) sys_call_table);
 	spin_unlock(&calltable_lock);
 }
 
