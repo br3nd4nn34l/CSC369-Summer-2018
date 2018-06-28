@@ -158,7 +158,7 @@ char *find_physpage(addr_t vaddr, char type) {
     unsigned dir_index = PGDIR_INDEX(vaddr);
 
     // Initialize second level if directory entry is invalid
-    if (pgdir[dir_index].pde & ~PG_VALID){
+    if (!(pgdir[dir_index].pde & PG_VALID)){
         pgdir[dir_index] = init_second_level();
     }
 
@@ -168,7 +168,7 @@ char *find_physpage(addr_t vaddr, char type) {
 
     // Determine pointer to table entry
     unsigned table_index = PGTBL_INDEX(vaddr); // Index for the entry in the page table
-    table_entry_ptr = &(table_start[table_index]); // Pointer to the page table entry
+    table_entry_ptr = &(table_start [table_index]); // Pointer to the page table entry
 
     // Check if table_entry_ptr is valid or not, on swap or not, and handle appropriately
     int is_valid = table_entry_ptr->frame & PG_VALID;
@@ -215,6 +215,9 @@ char *find_physpage(addr_t vaddr, char type) {
 
     // Call replacement algorithm's ref_fcn for this page
     ref_fcn(table_entry_ptr);
+
+    // Increment ref count
+    ref_count++;
 
     // Return pointer into (simulated) physical memory at start of frame
     return &physmem[(table_entry_ptr->frame >> PAGE_SHIFT) * SIMPAGESIZE];
