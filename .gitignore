@@ -1,2 +1,12 @@
+# Ignore everything without an extension
+*
+!*/
+!*.*
+
 # Ignore JetBrains .idea folders
+*.DS_Store
 .idea/
+*.vscode
+*.o
+swapfile.*
+*.ref
