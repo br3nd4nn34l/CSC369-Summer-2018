@@ -35,7 +35,7 @@ int clock_evict() {
 
     while (is_referenced()) {
         turn_off_reference();
-        // move clock_arm in clock wised direction after turning off current frames' ref bit
+        // move clock_arm in clock wised direction after turning off current frame's ref bit
         sweep_clock_arm();
     }
     // evict current frame, advance to next frame
