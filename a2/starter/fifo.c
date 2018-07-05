@@ -51,7 +51,7 @@ void enqueue(Queue* q, int value){
     // Set the value at the back of the queue
     q->contents[q->back] = value;
 
-    // Move the back backwards, but make sure to loop around
+    // Move the back rightwards, but make sure to loop around
     q->back = (q->back + 1) % (q->size);
 }
 

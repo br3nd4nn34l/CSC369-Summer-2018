@@ -52,7 +52,9 @@ int clock_evict() {
  * Input: The page table entry for the page that is being accessed.
  */
 void clock_ref(pgtbl_entry_t *p) {
-
+    // Don't need to do anything here,
+    // R is the only thing that needs to be updated for clock,
+    // and it's already updated when we reference a page
 	return;
 }
 

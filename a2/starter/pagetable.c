@@ -23,7 +23,7 @@ int evict_dirty_count = 0;
  *
  * Counters for evictions should be updated appropriately in this function.
  */
-int allocate_frame(pgtbl_entry_t *p) {
+int allocate_frame(pgtbl_entry_t* p) {
     int i;
 
     // Renaming frame -> frame_number because frame is a type
@@ -44,8 +44,8 @@ int allocate_frame(pgtbl_entry_t *p) {
         // IMPLEMENTATION NEEDED
 
         // Grab the victim
-        struct frame *victim = &coremap[frame_number];
-        pgtbl_entry_t *victim_entry = victim->pte;
+        struct frame* victim = &coremap[frame_number];
+        pgtbl_entry_t* victim_entry = victim->pte;
 
         // Dirty = 1 -> page is modified and must be written to disk
         if (coremap[frame_number].pte->frame & PG_DIRTY) {
@@ -94,11 +94,11 @@ void init_pagetable() {
 pgdir_entry_t init_second_level() {
     int i;
     pgdir_entry_t new_entry;
-    pgtbl_entry_t *pgtbl;
+    pgtbl_entry_t* pgtbl;
 
     // Allocating aligned memory ensures the low bits in the pointer must
     // be zero, so we can use them to store our status bits, like PG_VALID
-    if (posix_memalign((void **) &pgtbl, PAGE_SIZE,
+    if (posix_memalign((void**) &pgtbl, PAGE_SIZE,
                        PTRS_PER_PGTBL * sizeof(pgtbl_entry_t)) != 0) {
         perror("Failed to allocate aligned memory for page table");
         exit(1);
@@ -128,9 +128,9 @@ pgdir_entry_t init_second_level() {
  */
 void init_frame(int frame, addr_t vaddr) {
     // Calculate pointer to start of frame in (simulated) physical memory
-    char *mem_ptr = &physmem[frame * SIMPAGESIZE];
+    char* mem_ptr = &physmem[frame * SIMPAGESIZE];
     // Calculate pointer to location in page where we keep the vaddr
-    addr_t *vaddr_ptr = (addr_t *) (mem_ptr + sizeof(int));
+    addr_t* vaddr_ptr = (addr_t*) (mem_ptr + sizeof(int));
 
     memset(mem_ptr, 0, SIMPAGESIZE); // zero-fill the frame
     *vaddr_ptr = vaddr;             // record the vaddr for error checking
@@ -151,14 +151,14 @@ void init_frame(int frame, addr_t vaddr) {
  * Counters for hit, miss and reference events should be incremented in
  * this function.
  */
-char *find_physpage(addr_t vaddr, char type) {
+char* find_physpage(addr_t vaddr, char type) {
     pgtbl_entry_t* table_entry_ptr = NULL; // pointer to the full page table entry for vaddr
 
     // Get the index for the directory entry
     unsigned dir_index = PGDIR_INDEX(vaddr);
 
     // Initialize second level if directory entry is invalid
-    if (!(pgdir[dir_index].pde & PG_VALID)){
+    if (!(pgdir[dir_index].pde & PG_VALID)) {
         pgdir[dir_index] = init_second_level();
     }
 
@@ -168,7 +168,7 @@ char *find_physpage(addr_t vaddr, char type) {
 
     // Determine pointer to table entry
     unsigned table_index = PGTBL_INDEX(vaddr); // Index for the entry in the page table
-    table_entry_ptr = &(table_start [table_index]); // Pointer to the page table entry
+    table_entry_ptr = &(table_start[table_index]); // Pointer to the page table entry
 
     // Check if table_entry_ptr is valid or not, on swap or not, and handle appropriately
     int is_valid = table_entry_ptr->frame & PG_VALID;
@@ -179,7 +179,7 @@ char *find_physpage(addr_t vaddr, char type) {
         hit_count++;
     }
 
-    // Entry is not in memory, handle according to swap status
+        // Entry is not in memory, handle according to swap status
     else {
 
         miss_count++;  // Not in memory -> counts as miss!
@@ -191,9 +191,7 @@ char *find_physpage(addr_t vaddr, char type) {
         if (is_swapped) {
             swap_pagein(frame_number, table_entry_ptr->swap_off); // Get page off swap
             frame &= ~PG_ONSWAP; // Page is now off the swap -> ONSWAP = 0
-        }
-
-        else {
+        } else {
             init_frame(frame_number, vaddr); // need to make the actual frame
             frame |= PG_DIRTY; // Page is in memory, still needs to be swapped -> DIRTY = 1
             table_entry_ptr->swap_off = INVALID_SWAP; // Page still needs a swap offset
@@ -223,7 +221,7 @@ char *find_physpage(addr_t vaddr, char type) {
     return &physmem[(table_entry_ptr->frame >> PAGE_SHIFT) * SIMPAGESIZE];
 }
 
-void print_pagetbl(pgtbl_entry_t *pgtbl) {
+void print_pagetbl(pgtbl_entry_t* pgtbl) {
     int i;
     int first_invalid, last_invalid;
     first_invalid = last_invalid = -1;
@@ -265,7 +263,7 @@ void print_pagedirectory() {
     int first_invalid, last_invalid;
     first_invalid = last_invalid = -1;
 
-    pgtbl_entry_t *pgtbl;
+    pgtbl_entry_t* pgtbl;
 
     for (i = 0; i < PTRS_PER_PGDIR; i++) {
         if (!(pgdir[i].pde & PG_VALID)) {
@@ -279,7 +277,7 @@ void print_pagedirectory() {
                        first_invalid, last_invalid);
                 first_invalid = last_invalid = -1;
             }
-            pgtbl = (pgtbl_entry_t *) (pgdir[i].pde & PAGE_MASK);
+            pgtbl = (pgtbl_entry_t*) (pgdir[i].pde & PAGE_MASK);
             printf("[%d]: %p\n", i, pgtbl);
             print_pagetbl(pgtbl);
         }
