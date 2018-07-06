@@ -11,14 +11,16 @@ extern int debug;
 
 extern struct frame* coremap;
 
+unsigned* timestamp_list;
+unsigned timestamp;
+
 //region DESCRIPTION OF LRU IMPLEMENTATION
 
 /*
  * We are going to be implementing exact LRU with timestamps
- * Thus each PTE needs a timestamp
- * Luckily the provided PTEs have a section of unused bits
- * Therefore we will leverage this section of bits to maintain our timestamp
- * Timestamps will be dictated by a cyclical counter that increments every reference
+ * Thus each PTE needs a timestamp, so we will maintain an array of unsigned timestamps.
+ * The indices of this array will be frame numbers.
+ * Unsigned int timestamps should be accurate within 2^32 - 1 references, which is very large.
  *
  * We are using the timestamp implementation because
  *      eviction is much less frequent than referencing (when memory is sufficiently large)
@@ -28,65 +30,16 @@ extern struct frame* coremap;
 
 //endregion
 
-// TODO use an array to keep track of timestamp to avoid memory limit
-
-//region Ticker Implementation
-
-// Ticker that maintains a value and maximum
-// If value exceeds maxValue, it is reset to 0
-typedef struct {
-    int value;
-    int maxValue;
-} Ticker;
-
-// To construct a Ticker with maxValue
-Ticker* makeTicker(int maxValue) {
-    Ticker* ret = malloc(sizeof(Ticker));
-    ret->value = 0;
-    ret->maxValue = maxValue;
-
-    return ret;
-}
-
-// Returns the last value of ticker and increments ticker's value
-int tick(Ticker* ticker) {
-    int ret = ticker->value;
-    ticker->value = (ticker->value + 1) % ticker->maxValue;
-    return ret;
-}
-
-//endregion
-
-//region Timestamp Utilities
-
-
-const int NUM_INDICATOR_BITS = 4; // S, R, D, V
-const unsigned TIMESTAMP_MASK = ~0 & // Start with all 1s
-                          ~PAGE_MASK & // Frame Number -> 0
-                          ~PG_ONSWAP & // SWAP -> 0
-                          ~PG_REF & // REF -> 0
-                          ~PG_DIRTY & // DIRTY -> 0
-                          ~PG_VALID; // VALID -> 0
-
-const int MAX_TIMESTAMP = (int) (TIMESTAMP_MASK >> NUM_INDICATOR_BITS); // Shifted to cover indicator bits
-
 unsigned get_timestamp(pgtbl_entry_t* p){
-    return p->frame & TIMESTAMP_MASK;
+    int frame_number = p->frame >> PAGE_SHIFT;
+    return timestamp_list[frame_number];
 }
 
-void set_timestamp(pgtbl_entry_t* p, int timestamp) {
-
-    // Assuming that timestamp has all zeros in LHS
-    unsigned shifted_stamp = (unsigned) (timestamp << NUM_INDICATOR_BITS);
-
-    // Making sure that the given stamp can fit into the timestamp mask
-    unsigned masked_stamp = TIMESTAMP_MASK & shifted_stamp;
-
-    // Replacing timestamp of p
-    p->frame |= masked_stamp;
+void set_timestamp(pgtbl_entry_t* p) {
+    int frame_number = p->frame >> PAGE_SHIFT;
+    timestamp_list[frame_number] = timestamp;
+    timestamp++;
 }
-
-//endregion
 
 /* Page to evict is chosen using the accurate LRU algorithm.
  * Returns the page frame number (which is also the index in the coremap)
@@ -118,14 +71,8 @@ int lru_evict() {
  * Input: The page table entry for the page that is being accessed.
  */
 
-//region Global Variables
-
-Ticker* ticker; // For grabbing timestamp values
-
-//endregion
-
 void lru_ref(pgtbl_entry_t* p) {
-    set_timestamp(p, tick(ticker));
+    set_timestamp(p);
     return;
 }
 
@@ -133,5 +80,6 @@ void lru_ref(pgtbl_entry_t* p) {
  * replacement algorithm 
  */
 void lru_init() {
-    ticker = makeTicker(MAX_TIMESTAMP);
+    timestamp = 0;
+    timestamp_list = calloc((size_t) memsize, sizeof(unsigned));
 }
