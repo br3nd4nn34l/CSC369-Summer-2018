@@ -44,6 +44,7 @@ void destroyList(List* list) {
     free(list->contents);
     list->contents = NULL;
     list->count = list->capacity = 0;
+    free(list);
 }
 
 // TODO SEE IF REALLOC WORKS
