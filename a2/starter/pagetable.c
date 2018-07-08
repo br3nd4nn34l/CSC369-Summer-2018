@@ -179,7 +179,7 @@ char* find_physpage(addr_t vaddr, char type) {
         hit_count++;
     }
 
-        // Entry is not in memory, handle according to swap status
+    // Entry is not in memory, handle according to swap status
     else {
 
         miss_count++;  // Not in memory -> counts as miss!

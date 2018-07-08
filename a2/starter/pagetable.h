@@ -26,7 +26,7 @@
 #define PTRS_PER_PGTBL    4096
 
 #else // TRACE_32
-// User-level virtual addresses on 32-bit Linux system are 32 bits, and the 
+// User-level virtual addresses on 32-bit Linux system are 32 bits, and the
 // page size is still 4096 (12 bits).
 // We split the remaining 20 bits evenly into top-level (page directory) index
 // and second level (page table) index, using 10 bits for each.
@@ -46,57 +46,73 @@ typedef unsigned long addr_t;
 // These defines allow us to take advantage of the compiler's typechecking
 
 // Page directory entry (top-level)
-typedef struct { 
-	uintptr_t pde; 
+typedef struct {
+    uintptr_t pde;
 } pgdir_entry_t;
 
 // Page table entry (2nd-level). 
-typedef struct { 
-	unsigned int frame; // if valid bit == 1, physical frame holding vpage
-	off_t swap_off;       // offset in swap file of vpage, if any
-} pgtbl_entry_t;    
+typedef struct {
+    unsigned int frame; // if valid bit == 1, physical frame holding vpage
+    off_t swap_off;       // offset in swap file of vpage, if any
+} pgtbl_entry_t;
 
 extern void init_pagetable();
-extern char *find_physpage(addr_t vaddr, char type);
+
+extern char* find_physpage(addr_t vaddr, char type);
 
 extern void print_pagedirectory(void);
 
 struct frame {
-	char in_use;       // True if frame is allocated, False if frame is free
-	pgtbl_entry_t *pte;// Pointer back to pagetable entry (pte) for page
-	                   // stored in this frame
+    char in_use;       // True if frame is allocated, False if frame is free
+    pgtbl_entry_t* pte;// Pointer back to pagetable entry (pte) for page
+                       // stored in this frame
 };
 
 /* The coremap holds information about physical memory.
  * The index into coremap is the physical page frame number stored
  * in the page table entry (pgtbl_entry_t).
  */
-extern struct frame *coremap;
+extern struct frame* coremap;
 
 
 // Swap functions for use in other files
 extern int swap_init(unsigned swapsize);
+
 extern void swap_destroy(void);
+
 extern int swap_pagein(unsigned frame, int swap_offset);
+
 extern int swap_pageout(unsigned frame, int swap_offset);
 
 extern void rand_init();
+
 extern void lru_init();
+
 extern void clock_init();
+
 extern void fifo_init();
+
 extern void opt_init();
 
 // These may not need to do anything for some algorithms
-extern void rand_ref(pgtbl_entry_t *);
-extern void lru_ref(pgtbl_entry_t *);
-extern void clock_ref(pgtbl_entry_t *);
-extern void fifo_ref(pgtbl_entry_t *);
-extern void opt_ref(pgtbl_entry_t *);
+extern void rand_ref(pgtbl_entry_t*);
+
+extern void lru_ref(pgtbl_entry_t*);
+
+extern void clock_ref(pgtbl_entry_t*);
+
+extern void fifo_ref(pgtbl_entry_t*);
+
+extern void opt_ref(pgtbl_entry_t*);
 
 extern int rand_evict();
+
 extern int lru_evict();
+
 extern int clock_evict();
+
 extern int fifo_evict();
+
 extern int opt_evict();
 
 #endif /* PAGETABLE_H */
