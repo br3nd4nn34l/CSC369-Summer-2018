@@ -157,59 +157,16 @@ void* listPeek(List* list) {
 
 //region HASH TABLE IMPLEMENTATION
 
-typedef struct KeyValuePair {
+typedef struct {
     unsigned key;
     void* value;
-    struct KeyValuePair* prev;
-    struct KeyValuePair* next;
 } KeyValuePair;
 
 KeyValuePair* makeKeyValuePair(unsigned key, void* value) {
     KeyValuePair* ret = malloc(sizeof(KeyValuePair));
     ret->key = key;
     ret->value = value;
-    ret->prev = NULL;
-    ret->next = NULL;
     return ret;
-}
-
-// Frees the space for a key value pair (ASSUMED NOT TO HAVE PREV OR NEXT)
-void* destroyDisconnectedKvp(KeyValuePair* pair) {
-
-    // Abort if there is no pair
-    if (pair == NULL) {
-        return NULL;
-    }
-
-    // Extract value
-    void* value = pair->value;
-
-    // Free pair
-    free(pair);
-
-    // Return value
-    return value;
-}
-
-// Disconnects KVP from its neighbours and vice versa
-void disconnectKvp(KeyValuePair* pair) {
-
-    KeyValuePair* prev = pair->prev;
-    KeyValuePair* next = pair->next;
-
-    // Make next previous' next
-    if (prev != NULL) {
-        prev->next = next;
-    }
-
-    // Make prev next's prev
-    if (next != NULL) {
-        next->prev = prev;
-    }
-
-    // Disconnect the given pair from next and prev
-    pair->prev = NULL;
-    pair->next = NULL;
 }
 
 typedef struct {
@@ -271,35 +228,6 @@ void* hashTableGet(HashTable* table, unsigned key) {
     return matching->value;
 }
 
-// Prepends a KVP to table's entries (key is assumed NOT to be in table)
-void prependKvp(HashTable* table, KeyValuePair* pair) {
-
-    KeyValuePair* oldHead = table->entries;
-
-    // Old head is now after the new pair
-    pair->next = oldHead;
-
-    // New pair is now before the old head
-    if (oldHead != NULL) {
-        oldHead->prev = pair;
-    }
-
-    // Replace the head
-    table->entries = pair;
-}
-
-// Deletes a KVP from table's entries (key is assumed to be in table)
-void removeKvp(HashTable* table, KeyValuePair* pair) {
-
-    // Special case: pair is the head entry -> shift head to next element
-    if (pair == table->entries) {
-        table->entries = table->entries->next;
-    }
-
-    // Disconnect KVP from it's neighbours and vice versa
-    disconnectKvp(pair);
-}
-
 // Sets key to map to value in table.
 // Returns the value overwritten if key is already in table
 void* hashTableSet(HashTable* table, unsigned key, void* value) {
@@ -320,10 +248,9 @@ void* hashTableSet(HashTable* table, unsigned key, void* value) {
         return ret;
     }
 
-        // Otherwise insert into the bucket, and prepend to entries
+        // Otherwise insert into the bucket
     else {
         KeyValuePair* newPair = makeKeyValuePair(key, value);
-        prependKvp(table, newPair);
         listAppend(bucket, newPair);
         return NULL;
     }
@@ -354,19 +281,17 @@ void* hashTableRemove(HashTable* table, unsigned key) {
         table->buckets[hash] = NULL;
     }
 
-
-
-    // Remove the KVP from table
-    removeKvp(table, matching);
-
-    // KVP is now disconnected, so we can return the result of its destruction
-    return destroyDisconnectedKvp(matching);
+    void* ret = matching->value;
+    free(matching);
+    return ret;
 }
 
 //endregion
 
 //region BELADY IMPLEMENTATION
 
+int curRef;
+List* pageList;
 HashTable* beladyTable;
 
 // Creates a pointer that points to val
@@ -449,26 +374,20 @@ void addBeladyPage(HashTable* table, unsigned pageNum, int time) {
 
 // Turns a trace file into a hash table that maps
 // (page numbers) to (list of DECREASING reference times)
-HashTable* makeBeladyTable(char* trace_path) {
-
-    // List of ALL page references
-    List* pageList = makePageList(trace_path);
+HashTable* makeBeladyTable() {
 
     // Instantiate a hash table proportional
     // in size to number of frames in memory
     int BUCKET_SIZE = 5;
     HashTable* ret = makeHashTable((size_t) memsize / BUCKET_SIZE);
 
-    // Repeatedly pop off the end of the page list to
-    // create lists of DECREASING reference times
-    while(pageList->count > 0){
-        unsigned* pageNumPtr = listPop(pageList);
-        unsigned pageNum = destroyUnsignedPtr(pageNumPtr);
-        addBeladyPage(ret, pageNum, (int) pageList->count);
+    // Create lists of DECREASING reference times for every
+    int i;
+    for (i = 0; i < pageList->count; i++){
+        int time = (int) pageList->count - i - 1;
+        unsigned* pageNumPtr = (unsigned*) pageList->contents[time];
+        addBeladyPage(ret, *pageNumPtr, time);
     }
-
-    // Destroy the page list since it is now empty
-    destroyList(pageList);
 
     return ret;
 }
@@ -516,116 +435,6 @@ int peekNextRefTime(unsigned pageNum) {
     return *last;
 }
 
-// Determines the page number with the MINIMUM reference time in beladyTable
-unsigned closestPageNumber() {
-
-    // Note: peekNextRefTime never returns -1
-    // because KVPs are guaranteed to be in the table
-    KeyValuePair* pair = beladyTable->entries;
-
-    unsigned soonestPage = pair->key;
-    int soonestTime = peekNextRefTime(soonestPage);
-
-    for (; pair != NULL; pair = pair->next) {
-        unsigned curPage = pair->key;
-        int curTime = peekNextRefTime(curPage);
-
-        // Update values to determine soonest page number
-        if (curTime < soonestTime) {
-            soonestTime = curTime;
-            soonestPage = curPage;
-        }
-    }
-
-    return soonestPage;
-}
-
-// Return 1 iff pageNum is in physical memory
-int inPhysicalMemory(unsigned pageNum){
-
-    // Shift page number to determine virtual address
-    addr_t vaddr = pageNum << PAGE_SHIFT;
-
-    // Find PDE, abort if invalid
-    unsigned dirIndex = PGDIR_INDEX(vaddr);
-    pgdir_entry_t dirEntry = pgdir[dirIndex];
-    if (!(dirEntry.pde & PG_VALID)){
-        return 0;
-    }
-
-    // Find start of the page table, then the pointer to the entry
-    unsigned tableIndex = PGTBL_INDEX(vaddr);
-    pgtbl_entry_t* tableStart = (pgtbl_entry_t*) (dirEntry.pde & PAGE_MASK);
-    pgtbl_entry_t* tableEntry = &(tableStart[tableIndex]);
-
-    // Abort if the PTE is invalid
-    if (!(tableEntry->frame & PG_VALID)){
-        return 0;
-    }
-
-    return 1;
-}
-
-// Returns the PAGE number to evict from memory
-unsigned victimPageNumber(){
-
-    KeyValuePair* pair = beladyTable->entries;
-    unsigned furthestPage = pair->key;
-    int furthestTime = peekNextRefTime(furthestPage);
-
-    // We're never going to see the first page again, so abort
-    if (furthestTime == -1){
-        return furthestPage;
-    }
-
-    for (;pair != NULL; pair = pair->next) {
-        unsigned pageNum = pair->key;
-
-        // Skip over pages not currently in physical memory
-        if (!inPhysicalMemory(pageNum)){
-            continue;
-        }
-
-        // Get the next time the page will be called
-        int nextTime = peekNextRefTime(pageNum);
-
-        // At this point, page is in memory but will never be seen again, so evict it
-        if (nextTime == -1){
-            return pageNum;
-        }
-
-        // Update the current champion
-        if (nextTime > furthestTime){
-            furthestPage = pageNum;
-            furthestTime = nextTime;
-        }
-    }
-
-    return furthestPage;
-}
-
-// Returns the FRAME number to evict from memory
-unsigned victimFrameNumber(){
-
-    // This is guaranteed to be in memory
-    unsigned pageNum = victimPageNumber();
-
-    // Shift page number to determine virtual address
-    addr_t vaddr = pageNum << PAGE_SHIFT;
-
-    // Find PDE
-    unsigned dirIndex = PGDIR_INDEX(vaddr);
-    pgdir_entry_t dirEntry = pgdir[dirIndex];
-
-    // Find start of the page table, then the pointer to the entry
-    unsigned tableIndex = PGTBL_INDEX(vaddr);
-    pgtbl_entry_t* tableStart = (pgtbl_entry_t*) (dirEntry.pde & PAGE_MASK);
-    pgtbl_entry_t* tableEntry = &(tableStart[tableIndex]);
-
-    // Return the frame number of the entry
-    return tableEntry->frame >> PAGE_SHIFT;
-}
-
 //endregion
 
 
@@ -635,11 +444,27 @@ unsigned victimFrameNumber(){
  */
 int opt_evict() {
 
-    // Figure out which page to evict
-    unsigned victim = victimFrameNumber();
+    int victim = 0;
+    int maxRefTime = -1;
 
-    // Pop the next reference time from this page to keep the data structure in sync
-    popNextRefTime(victim);
+    // Find the page that won't be referenced in the longest time
+    int i;
+    for (i = 0; i < memsize; i++){
+        struct frame f = coremap[i];
+
+        int nextRefTime = peekNextRefTime(f.page);
+
+        // We never see the page again, so get rid of the frame
+        if (nextRefTime == -1){
+            return i;
+        }
+
+        // Update to new victim
+        if (maxRefTime < nextRefTime){
+            victim = i;
+            maxRefTime = nextRefTime;
+        }
+    }
 
     return victim;
 }
@@ -650,17 +475,29 @@ int opt_evict() {
  */
 void opt_ref(pgtbl_entry_t* p) {
 
-    // Figure out which page is being referenced
-    unsigned nextPage = closestPageNumber();
+    // Figure out the frame of this page
+    unsigned frameNumber = (p->frame >> PAGE_SHIFT);
 
-    // Pop the next reference time from this page to keep the data structure in sync
-    popNextRefTime(nextPage);
+    // Figure out which page is being referenced
+    unsigned* pageNumberPtr = (unsigned*) pageList->contents[curRef];
+
+    // Have the frame refer to this page number
+    struct frame* f = &(coremap[frameNumber]);
+    f->page = *pageNumberPtr;
+
+    // Pop off the next occurrence for this page
+    popNextRefTime(*pageNumberPtr);
+
+    // Ensure that the frames and pages are kept in sync
+    curRef += 1;
 }
 
 /* Initializes any data structures needed for this
  * replacement algorithm.
  */
 void opt_init() {
-    beladyTable = makeBeladyTable(tracefile);
+    curRef = 0;
+    pageList = makePageList(tracefile);
+    beladyTable = makeBeladyTable();
 }
 
