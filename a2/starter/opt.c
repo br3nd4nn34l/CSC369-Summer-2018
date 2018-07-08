@@ -318,14 +318,6 @@ unsigned* createUnsignedPtr(unsigned val){
     return ret;
 }
 
-// Creates a pointer that points to val
-// This is used to insert into unsigned Lists.
-unsigned destroyUnsignedPtr(unsigned* ptr){
-    unsigned ret = *ptr;
-    free(ptr);
-    return ret;
-}
-
 // Makes a list of all page numbers appearing in the given trace path
 // Stops program with an error if file interactions result in an error
 List* makePageList(char* trace_path) {
