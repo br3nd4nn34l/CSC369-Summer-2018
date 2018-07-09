@@ -172,7 +172,6 @@ KeyValuePair* makeKeyValuePair(unsigned key, void* value) {
 typedef struct {
     size_t numBuckets;
     List** buckets;
-    KeyValuePair* entries;
 } HashTable;
 
 int hashFunction(HashTable* table, unsigned key) {
@@ -192,7 +191,6 @@ HashTable* makeHashTable(size_t numBuckets) {
     HashTable* ret = malloc(sizeof(HashTable));
     ret->numBuckets = numBuckets;
     ret->buckets = initBuckets(numBuckets);
-    ret->entries = NULL;
     return ret;
 }
 
