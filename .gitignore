@@ -1,5 +1,6 @@
 # Ignore everything without an extension
 *
+!Makefile
 !*/
 !*.*
 
