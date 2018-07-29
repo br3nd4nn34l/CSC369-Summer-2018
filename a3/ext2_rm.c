@@ -26,7 +26,8 @@ int ext2_rm(unsigned char* disk, char* path) {
     // Delete file or link
     else {
         // get parent diretory's entry
-        path_components->count--;
+//        path_components->count--;
+        listPop(path_components);
 
         struct ext2_dir_entry_2* parent_entry = traverse_path(disk, path_components);
         free_parent_inode_block(disk, parent_entry, file_name);

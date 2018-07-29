@@ -129,18 +129,26 @@ bool is_link(struct ext2_dir_entry_2* dir) {
 
 //region Bitmap Manipulations
 
-bool get_bitmap_val(unsigned char* bitmap, int bit){
-    int result = (bitmap[bit/8] >> (bit % 8)) & 0x1;
+bool get_bitmap_val(unsigned char* bitmap, one_index bit){
+    int result = (bitmap[bit-1 / 8] >> (bit-1 % 8)) & 0x1;
     return result != 0;
 }
 
-void set_bitmap_val(unsigned char* bitmap, int bit, bool value){
-    int binary = 0;
+void set_bitmap_val(unsigned char* bitmap, zero_index bit, bool value){
+
+    int index = bit / 8;
+    int shift = bit % 8;
+    int one_hot = (1 << shift);
+
+    // Set to 1
     if (value){
-        binary = 1;
+        bitmap[index] |= (unsigned char) one_hot;
     }
 
-    bitmap[bit-1 / 8] ^= (binary << (bit-1 % 8));
+    // Set to 0
+    else {
+        bitmap[index] &= (unsigned char) ~one_hot;
+    }
 }
 
 void increase_free_blocks_count(struct ext2_super_block* sb, struct ext2_group_desc* gd, int count) {
@@ -172,22 +180,58 @@ bool entry_name_comparison(struct ext2_dir_entry_2* dir, char* name){
     return true;
 }
 
+// For maintaining a pair of previous and current
+typedef struct {
+    struct ext2_dir_entry_2* prev;
+    struct ext2_dir_entry_2* cur;
+} ext2_dir_entry_pair;
+
+ext2_dir_entry_pair* make_entry_pair(struct ext2_dir_entry_2* prev, struct ext2_dir_entry_2* cur){
+    ext2_dir_entry_pair* ret = malloc(sizeof(ext2_dir_entry_pair));
+    ret->prev = prev;
+    ret->cur = cur;
+    return ret;
+}
+
+
+ext2_dir_entry_pair* block_matching_pair(struct ext2_dir_entry_2* start, char* name) {
+
+    ext2_dir_entry_pair* ret = make_entry_pair(NULL, NULL);
+
+    for (struct ext2_dir_entry_2* cur = start; is_valid_dir_entry(start, cur); cur = get_next_dir_entry(cur)) {
+
+        if (entry_name_comparison(cur, name)) {
+            ret->cur = cur;
+            return ret;
+        }
+
+        ret->prev = cur;
+    }
+
+    // No pair found, free the pair and return null
+    free(ret);
+    return NULL;
+}
+
 // Finds the directory entry in the data block starting at start,
 // whose file name is equal to name
 // If no such entry exists, return NULL
 struct ext2_dir_entry_2* block_matching_entry(struct ext2_dir_entry_2* start, char* name) {
 
-    for (struct ext2_dir_entry_2* cur = start; is_valid_dir_entry(start, cur); cur = get_next_dir_entry(cur)) {
-        // TODO : THIS NAME COMPARISON MAY BE INCORRECT
-        if (entry_name_comparison(cur, name)) {
-            return cur;
-        }
+    // Try to get the pair that matches name, or abort with NULL
+    ext2_dir_entry_pair* pair = block_matching_pair(start, name);
+    if (pair == NULL){
+        return NULL;
     }
-    return NULL;
+
+    struct ext2_dir_entry_2* ret = pair->cur;
+    free(pair);
+    return ret;
 }
 
-// Finds the directory entry in inode whose name is name
-struct ext2_dir_entry_2* find_matching_entry(unsigned char* disk, struct ext2_inode* inode, char* name) {
+
+// Finds the directory entry pair in inode where cur's name is name
+ext2_dir_entry_pair* find_matching_pair(unsigned char* disk, struct ext2_inode* inode, char* name) {
     if (name == NULL) return NULL;
 
     // Look through direct data blocks (0 to 11 inclusive)
@@ -199,9 +243,9 @@ struct ext2_dir_entry_2* find_matching_entry(unsigned char* disk, struct ext2_in
             continue;
         }
 
-        // Get the first directory entry, and look for a matching directory
+        // Get the first directory entry, and look for a matching pair
         struct ext2_dir_entry_2* first_entry = (struct ext2_dir_entry_2*) get_block(disk, block_num);
-        struct ext2_dir_entry_2* match = block_matching_entry(first_entry, name);
+        ext2_dir_entry_pair* match = block_matching_pair(first_entry, name);
         if (match != NULL) {
             return match;
         }
@@ -222,15 +266,29 @@ struct ext2_dir_entry_2* find_matching_entry(unsigned char* disk, struct ext2_in
             continue;
         }
 
-        // Get the first directory entry, and look for a matching directory
+        // Get the first directory entry, and look for a matching pair
         struct ext2_dir_entry_2* first_entry = (struct ext2_dir_entry_2*) get_block(disk, block_num);
-        struct ext2_dir_entry_2* match = block_matching_entry(first_entry, name);
+        ext2_dir_entry_pair* match = block_matching_pair(first_entry, name);
         if (match != NULL) {
             return match;
         }
     }
 
     return NULL;
+}
+
+// Finds the directory entry in inode whose name is name
+struct ext2_dir_entry_2* find_matching_entry(unsigned char* disk, struct ext2_inode* inode, char* name) {
+
+    // Try to get the pair that matches name, or abort with NULL
+    ext2_dir_entry_pair* pair = find_matching_pair(disk, inode, name);
+    if (pair == NULL){
+        return NULL;
+    }
+
+    struct ext2_dir_entry_2* ret = pair->cur;
+    free(pair);
+    return ret;
 }
 
 
@@ -335,11 +393,19 @@ void free_file_inode(unsigned char* disk, struct ext2_dir_entry_2* entry) {
 
     inode->i_dtime = (unsigned int) time(0);
     increase_free_inodes_count(sb, gd, 1);
-    set_bitmap_val(inode_bitmap, entry->inode, 1);
+    set_bitmap_val(inode_bitmap, entry->inode - 1, 0);
 
     for (int i = 0; i <= 11; i++) {
+        one_index block_num = inode->i_block[i];
+
+        // Block not in use, skip it
+        if (block_num == 0){
+            continue;
+        }
+
+        // Indicate the the block is free (set bitmap value to 1, increment number of free blocks)
         increase_free_blocks_count(sb, gd, 1);
-        set_bitmap_val(block_bitmap, inode->i_block[i], 1);
+        set_bitmap_val(block_bitmap, block_num - 1, 0);
     }
 
     // Skip absent indirect block
@@ -350,8 +416,15 @@ void free_file_inode(unsigned char* disk, struct ext2_dir_entry_2* entry) {
     // Look through indirect data block
     one_index* block_numbers = (one_index*) get_block(disk, inode->i_block[12]);
     for (int i = 0; i < EXT2_BLOCK_SIZE; i++) {
+        one_index block_num = block_numbers[i];
+
+        // Block not in use, skip it
+        if (block_num == 0){
+            continue;
+        }
+
         increase_free_blocks_count(sb, gd, 1);
-        set_bitmap_val(block_bitmap, block_numbers[i], 1);
+        set_bitmap_val(block_bitmap, block_num - 1, 0);
     }
 
 }
@@ -361,37 +434,43 @@ void free_parent_inode_block(unsigned char* disk, struct ext2_dir_entry_2* paren
     struct ext2_super_block* sb = get_super_block(disk);
     struct ext2_group_desc* gd = get_group_descriptor(disk);
     unsigned char* block_bitmap = get_block_bitmap(disk);
-    struct ext2_dir_entry_2* prev_de = NULL;
+
 
     // Look through direct data blocks (0 to 11 inclusive)
     for (int i = 0; i <= 11; i++) {
+
         one_index block_num = parent_inode->i_block[i];
 
-        // Skip absent blocks if there is no block
+        // Skip absent blocks
         if (block_num == 0) {
             continue;
         }
 
-        // Get the first directory entry, and look for a matching directory
+        // Get the first directory entry, and look for a pair of entries where cur matches name
         struct ext2_dir_entry_2* first_entry = (struct ext2_dir_entry_2*) get_block(disk, block_num);
-        struct ext2_dir_entry_2* match = block_matching_entry(first_entry, name);
+        ext2_dir_entry_pair* pair = block_matching_pair(first_entry, name);
+        if (pair == NULL){
+            continue;
+        }
 
-        if (match != NULL) {
-            if (prev_de != NULL) {
-                // make sure previous entry will include the current entry after deletion
-                prev_de->rec_len += match->rec_len;
-                return;
+        // There is a matching pair, so manipulate the entries then return
+        else {
+
+            // Matching entry was the first in the block, skip over
+            if (pair->prev == NULL){
+                pair->cur->name_len = 0;
+                increase_free_blocks_count(sb, gd, 1);
+                set_bitmap_val(block_bitmap, block_num-1, 0);
             }
-            // if match is found at the first entry
 
-//            parent_inode->i_block[i] = 0;
-            match->name_len = 0;
-            increase_free_blocks_count(sb, gd, 1);
-            set_bitmap_val(block_bitmap, parent_inode->i_block[i], 1);
+            // Matching entry within block
+            else {
+                pair->prev->rec_len += pair->cur->rec_len;
+            }
+
+            free(pair);
             return;
         }
-        // keep track of previous directory entry
-        prev_de = first_entry;
     }
 
     // Skip absent indirect block
@@ -404,25 +483,34 @@ void free_parent_inode_block(unsigned char* disk, struct ext2_dir_entry_2* paren
     for (int i = 0; i < EXT2_BLOCK_SIZE; i++) {
         one_index block_num = block_numbers[i];
 
-        // Skip absent blocks if there is no block
+        // Skip absent blocks
         if (block_num == 0) {
             continue;
         }
 
-        // Get the first directory entry, and look for a matching directory
+        // Get the first directory entry, and look for a pair of entries where cur matches name
         struct ext2_dir_entry_2* first_entry = (struct ext2_dir_entry_2*) get_block(disk, block_num);
-        struct ext2_dir_entry_2* match = block_matching_entry(first_entry, name);
+        ext2_dir_entry_pair* pair = block_matching_pair(first_entry, name);
+        if (pair == NULL){
+            continue;
+        }
 
-        if (match != NULL) {
-            if (prev_de != NULL) {
-                // make sure previous entry will include the current entry after deletion
-                prev_de->rec_len += match->rec_len;
-                return;
+        // There is a matching pair, so manipulate the entries then return
+        else {
+
+            // Matching entry was the first in the block, skip over
+            if (pair->prev == NULL){
+                pair->cur->name_len = 0;
+                increase_free_blocks_count(sb, gd, 1);
+                set_bitmap_val(block_bitmap, block_num-1, 0);
             }
-            // if match is found at the first entry
-            parent_inode->i_block[i] = 0;
-            increase_free_blocks_count(sb, gd, 1);
-            set_bitmap_val(block_bitmap, parent_inode->i_block[i], 1);
+
+                // Matching entry within block
+            else {
+                pair->prev->rec_len += pair->cur->rec_len;
+            }
+
+            free(pair);
             return;
         }
     }
