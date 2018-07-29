@@ -1,6 +1,7 @@
 #include "ext2_helper.h"
 #include <fcntl.h>
 
+// TODO PRINTF SHOULD BE FPRINTF ON STDERR
 
 int ext2_rm(unsigned char* disk, char* path) {
     int ret;

@@ -96,13 +96,7 @@ struct ext2_dir_entry_2* get_next_dir_entry(struct ext2_dir_entry_2* entry) {
     return (struct ext2_dir_entry_2*) shifted;
 }
 
-bool is_valid_dir_entry(struct ext2_dir_entry_2* start, struct ext2_dir_entry_2* current) {
 
-    unsigned long distance = ((char* ) current) - ((char*) start);
-
-    return (distance < EXT2_BLOCK_SIZE) &&
-           (current->rec_len > 0);
-}
 
 //endregion
 
@@ -123,14 +117,39 @@ bool is_link(struct ext2_dir_entry_2* dir) {
             dir->file_type == EXT2_FT_SYMLINK;
 }
 
+bool is_valid_dir_entry(struct ext2_dir_entry_2* start, struct ext2_dir_entry_2* current) {
 
+    unsigned long distance = ((char* ) current) - ((char*) start);
+
+    return (distance < EXT2_BLOCK_SIZE) &&
+           (current->rec_len > 0);
+}
+
+bool entry_name_comparison(struct ext2_dir_entry_2* dir, char* name){
+
+    if (dir->name_len != strlen(name)) {
+        return false;
+    }
+
+    for (int i = 0; i < dir->name_len; i++){
+        if (dir->name[i] != name[i]){
+            return false;
+        }
+    }
+
+    return true;
+}
 
 //endregion
 
 //region Bitmap Manipulations
 
-bool get_bitmap_val(unsigned char* bitmap, one_index bit){
-    int result = (bitmap[bit-1 / 8] >> (bit-1 % 8)) & 0x1;
+bool get_bitmap_val(unsigned char* bitmap, zero_index bit){
+
+    int index = bit / 8;
+    int shift = bit % 8;
+
+    int result = (bitmap[index] >> shift) & 0x1;
     return result != 0;
 }
 
@@ -164,21 +183,6 @@ void increase_free_inodes_count(struct ext2_super_block* sb, struct ext2_group_d
 //endregion
 
 //region Path Traversal
-
-bool entry_name_comparison(struct ext2_dir_entry_2* dir, char* name){
-
-    if (dir->name_len != strlen(name)) {
-        return false;
-    }
-
-    for (int i = 0; i < dir->name_len; i++){
-        if (dir->name[i] != name[i]){
-            return false;
-        }
-    }
-
-    return true;
-}
 
 // For maintaining a pair of previous and current
 typedef struct {
@@ -291,7 +295,37 @@ struct ext2_dir_entry_2* find_matching_entry(unsigned char* disk, struct ext2_in
     return ret;
 }
 
+struct ext2_dir_entry_2* traverse_path(unsigned char* disk, List* path_components) {
 
+    struct ext2_dir_entry_2* entry = NULL;
+    struct ext2_inode* entry_inode = get_root_inode(disk);
+
+    for (zero_index ind = 0; ind < path_components->count; ind++) {
+        // Try to find the matching entry, abort if not found
+        entry = find_matching_entry(disk, entry_inode, path_components->contents[ind]);
+        if (entry == NULL) {
+            break;
+        }
+
+        // If entry is not a directory, abort - we can't traverse into it
+        if (!is_directory(entry)){
+
+            // Only return entry if we went through all components
+            return (ind == path_components->count - 1) ?
+                   entry : NULL;
+        }
+
+        // Update inode
+        entry_inode = get_inode_from_entry(disk, entry);
+    }
+
+    // Return entry, it should be a directory
+    return entry;
+}
+
+//endregion
+
+//region Printing
 
 void print_dir_name(struct ext2_dir_entry_2* dir){
 
@@ -360,28 +394,9 @@ void print_dir_contents(unsigned char* disk, struct ext2_dir_entry_2* entry, boo
     }
 }
 
-struct ext2_dir_entry_2* traverse_path(unsigned char* disk, List* path_components) {
+//endregion
 
-    struct ext2_dir_entry_2* entry = NULL;
-    struct ext2_inode* entry_inode = get_root_inode(disk);
-    for (zero_index ind = 0; ind < path_components->count; ind++) {
-        // Try to find the matching entry, abort if not found
-        entry = find_matching_entry(disk, entry_inode, path_components->contents[ind]);
-        if (entry == NULL) {
-            break;
-        }
-
-        // If entry is not a directory, abort - we can't traverse into it
-        if (!is_directory(entry)){
-            break;
-        }
-
-        // Update inode
-        entry_inode = get_inode_from_entry(disk, entry);
-    }
-
-    return entry;
-}
+//region Freeing
 
 void free_file_inode(unsigned char* disk, struct ext2_dir_entry_2* entry) {
 
@@ -520,10 +535,44 @@ void free_parent_inode_block(unsigned char* disk, struct ext2_dir_entry_2* paren
 
 //endregion
 
+//region Allocation
+
+one_index find_free_block_num(unsigned char* disk){
+
+
+    struct ext2_super_block* super_block = get_super_block(disk);
+    unsigned char* block_bitmap = get_block_bitmap(disk);
+
+    // TODO POSSIBLE OFF BY 1 ERROR
+    for (one_index i = 1; i < super_block->s_blocks_count + 1; i++){
+        if (!get_bitmap_val(block_bitmap, i - 1)){
+            return i;
+        }
+    }
+
+    return 0;
+}
+
+one_index find_free_inode_num(unsigned char* disk){
+    struct ext2_super_block* super_block = get_super_block(disk);
+    unsigned char* inode_bitmap = get_inode_bitmap(disk);
+
+    // TODO POSSIBLE OFF BY 1 ERROR
+    for (one_index i = 1; i < super_block->s_inodes_count + 1; i++){
+        if (!get_bitmap_val(inode_bitmap, i - 1)){
+            return i;
+        }
+    }
+
+    return 0;
+}
+
+//endregion
+
 //region System Utils
 
-void crash_with_usage(char* prog_name){
-    fprintf(stderr, "Usage: %s [disk] [option -a] [path]\n", prog_name);
+void crash_with_usage(char* err_msg){
+    fprintf(stderr, "%s\n", err_msg);
     exit(1);
 }
 

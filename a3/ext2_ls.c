@@ -2,6 +2,7 @@
 #include<fcntl.h>
 #include <getopt.h>
 
+// TODO PRINTF SHOULD BE FPRINTF ON STDERR
 
 int ext2_ls(unsigned char* disk, char* path, bool show_dots) {
     int ret;
@@ -36,10 +37,12 @@ int main(int argc, char* argv[]) {
     char* img = argv[1];
     char* path;
 
+    char err_msg[100];
+    sprintf(err_msg, "Usage: %s [disk] [option -a] [path]", argv[0]);
     switch(argc) {
         case 3:
             if (strcmp(argv[2], "-a") == 0) {
-                crash_with_usage(argv[0]);
+                crash_with_usage(err_msg);
             }
             path = argv[2];
             break;
@@ -47,7 +50,7 @@ int main(int argc, char* argv[]) {
             path = argv[3];
             break;
         default:
-            crash_with_usage(argv[0]);
+            crash_with_usage(err_msg);
     }
 
 
@@ -58,7 +61,7 @@ int main(int argc, char* argv[]) {
                 show_dots = true;
                 break;
             default:
-                crash_with_usage(argv[0]);
+                crash_with_usage(err_msg);
         }
     }
 
