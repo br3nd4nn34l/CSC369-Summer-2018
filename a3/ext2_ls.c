@@ -4,30 +4,30 @@
 
 
 int ext2_ls(unsigned char* disk, char* path, bool show_dots) {
-    List* path_components = split_path(path);
+    int ret;
 
+    List* path_components = split_path(path);
     struct ext2_dir_entry_2* entry = traverse_path(disk, path_components);
+
     if (entry == NULL) {
         printf("%s\n", "No such file or directory");
-        return ENOENT;
+        ret = ENOENT;
     }
 
-    if (is_file(entry) || is_link(entry)) {
-        printf("%s\n", (char*) listPeek(path_components));
-    } else if (is_directory(entry)) {
-        print_dir_contents(disk, entry, show_dots);
+    else {
+        if (is_file(entry) || is_link(entry)) {
+            printf("%s\n", (char*) listPeek(path_components));
+        } else if (is_directory(entry)) {
+            print_dir_contents(disk, entry, show_dots);
+        }
+        ret = 0;
     }
 
     destroyList(path_components);
-
-    return 0;
+    return ret;
 
 }
 
-void crash_with_usage(char* prog_name){
-    fprintf(stderr, "Usage: %s [disk] [option -a] [path]\n", prog_name);
-    exit(1);
-}
 
 int main(int argc, char* argv[]) {
     int ch = 0;
