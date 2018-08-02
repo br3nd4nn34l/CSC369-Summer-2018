@@ -28,7 +28,6 @@ List* split_path(char* path) {
 typedef unsigned int zero_index;
 typedef unsigned int one_index;
 
-
 //region Disk Fetching Functions
 
 unsigned char* load_disk_to_mem(int file_descriptor) {
@@ -49,6 +48,11 @@ unsigned char* load_disk_to_mem(int file_descriptor) {
 unsigned char* get_block(unsigned char* disk, one_index block_ind) {
     return (disk + (EXT2_BLOCK_SIZE * block_ind));
 }
+
+struct ext2_dir_entry_2* make_directory_entry(unsigned char* disk, one_index block_ind, int used_len) {
+    return (struct ext2_dir_entry_2*) (disk + (EXT2_BLOCK_SIZE * block_ind) + used_len);
+}
+
 
 struct ext2_super_block* get_super_block(unsigned char* disk) {
     return (struct ext2_super_block*) get_block(disk, 1);
@@ -178,6 +182,54 @@ void increase_free_blocks_count(struct ext2_super_block* sb, struct ext2_group_d
 void increase_free_inodes_count(struct ext2_super_block* sb, struct ext2_group_desc* gd, int count) {
     sb->s_free_inodes_count += count;
     gd->bg_free_inodes_count += count;
+}
+
+//endregion
+
+//region Allocation
+
+one_index find_free_block_num(unsigned char* disk){
+
+
+    struct ext2_super_block* super_block = get_super_block(disk);
+    unsigned char* block_bitmap = get_block_bitmap(disk);
+
+    // TODO POSSIBLE OFF BY 1 ERROR
+    one_index i;
+    one_index reserved_blocks = 22;
+    for (i = reserved_blocks + 1; i < super_block->s_blocks_count + 1; i++){
+        if (!get_bitmap_val(block_bitmap, i - 1)){
+            return i;
+        }
+    }
+
+    if (i == super_block->s_inodes_count) {
+        fprintf(stderr, "All data blocks are used.\n");
+        exit(1);
+    }
+
+    return 0;
+}
+
+one_index find_free_inode_num(unsigned char* disk){
+    struct ext2_super_block* super_block = get_super_block(disk);
+    unsigned char* inode_bitmap = get_inode_bitmap(disk);
+
+    // TODO POSSIBLE OFF BY 1 ERROR
+    // the first 11 inodes are reserved
+    one_index i;
+    for (i = EXT2_GOOD_OLD_FIRST_INO + 1; i < super_block->s_inodes_count + 1; i++){
+        if (!get_bitmap_val(inode_bitmap, i - 1)){
+            return i;
+        }
+    }
+
+    if (i == super_block->s_inodes_count) {
+        fprintf(stderr, "All inodes are used.\n");
+        exit(1);
+    }
+
+    return 0;
 }
 
 //endregion
@@ -533,40 +585,64 @@ void free_parent_inode_block(unsigned char* disk, struct ext2_dir_entry_2* paren
     return;
 }
 
-//endregion
+struct ext2_dir_entry_2* find_free_directory_entry(unsigned char* disk, struct ext2_inode* inode, char* file_name) {
 
-//region Allocation
-
-one_index find_free_block_num(unsigned char* disk){
-
-
-    struct ext2_super_block* super_block = get_super_block(disk);
-    unsigned char* block_bitmap = get_block_bitmap(disk);
-
-    // TODO POSSIBLE OFF BY 1 ERROR
-    for (one_index i = 1; i < super_block->s_blocks_count + 1; i++){
-        if (!get_bitmap_val(block_bitmap, i - 1)){
-            return i;
-        }
+    // look through direct blocks
+    one_index block_num = 1; // will be the last used block in this inode
+    int i; // will be the first unused block in this inode
+    for (i = 0; block_num != 0; i++) {
+        block_num = inode->i_block[i];
     }
 
-    return 0;
-}
+    struct ext2_dir_entry_2* new_de;
+    int required_size = 8 + (int) strlen(file_name);
+    if (i <= 11) {
+        // there are unused block in direct blocks
+        struct ext2_dir_entry_2* last_used_entry = (struct ext2_dir_entry_2*) get_block(disk, block_num);
 
-one_index find_free_inode_num(unsigned char* disk){
-    struct ext2_super_block* super_block = get_super_block(disk);
-    unsigned char* inode_bitmap = get_inode_bitmap(disk);
+        int total_used_rec_len = 0;
 
-    // TODO POSSIBLE OFF BY 1 ERROR
-    for (one_index i = 1; i < super_block->s_inodes_count + 1; i++){
-        if (!get_bitmap_val(inode_bitmap, i - 1)){
-            return i;
+        while (total_used_rec_len < EXT2_BLOCK_SIZE) {
+            total_used_rec_len += last_used_entry->rec_len;
+            last_used_entry = get_next_dir_entry(last_used_entry);
         }
+
+        // size of an entry is 8 + name length
+        int last_used_entry_size = sizeof(last_used_entry) + last_used_entry->name_len;
+        int rounding = 4 - (last_used_entry_size % 4);
+        total_used_rec_len += last_used_entry_size + rounding;
+        int space_left_in_block = EXT2_BLOCK_SIZE - total_used_rec_len;
+
+        if (space_left_in_block < required_size) {
+            // not enough space to insert the file name
+            struct ext2_super_block* sb = get_super_block(disk);
+            struct ext2_group_desc* gd = get_group_descriptor(disk);
+
+            one_index new_block = find_free_block_num(disk);
+            set_bitmap_val(get_block_bitmap(disk), new_block - 1, 1);
+            increase_free_blocks_count(sb, gd, -1);
+            inode->i_blocks += 2;
+            inode->i_block[i] = new_block;
+            new_de = make_directory_entry(disk, block_num, 0);
+            new_de->rec_len = EXT2_BLOCK_SIZE;
+        }
+        else {
+            // enough space to insert the file name
+            last_used_entry->rec_len = (unsigned short) (last_used_entry_size + rounding);
+            new_de = make_directory_entry(disk, block_num, total_used_rec_len);
+            new_de->rec_len = (unsigned short) (EXT2_BLOCK_SIZE -  total_used_rec_len);
+        }
+
+        return new_de;
+
+    } else if (i == 12) {
+        // have to look through indirect blocks
+        // TODO look at through pointer blocks
+        return NULL;
     }
 
-    return 0;
+    return NULL;
 }
-
 //endregion
 
 //region System Utils
@@ -578,3 +654,50 @@ void crash_with_usage(char* err_msg){
 
 //endregion
 
+//region Inodes and Datablocks
+
+struct ext2_inode* create_sym_inode(unsigned char* disk, one_index inode_index, char* source) {
+
+    struct ext2_super_block* sb = get_super_block(disk);
+    struct ext2_group_desc* gd = get_group_descriptor(disk);
+    unsigned char* inode_bitmap = get_inode_bitmap(disk);
+
+    increase_free_inodes_count(sb, gd, -1);
+    set_bitmap_val(inode_bitmap, inode_index - 1, 1);
+
+    struct ext2_inode* sym_inode = get_inode(disk, inode_index);
+
+    sym_inode->i_mode = EXT2_S_IFLNK;
+    sym_inode->i_size = (unsigned int) strlen(source); //size is the same as src node
+    sym_inode->i_ctime = (unsigned int) time(0);
+    sym_inode->i_dtime = 0;
+    sym_inode->i_blocks = 0;
+    sym_inode->i_links_count = 2; // Itself and from parent.
+
+    return sym_inode;
+}
+
+void write_str_to_new_inode(unsigned char* disk, struct ext2_inode* inode, char* content) {
+
+    struct ext2_super_block* sb = get_super_block(disk);
+    struct ext2_group_desc* gd = get_group_descriptor(disk);
+    unsigned char* block_bitmap = get_block_bitmap(disk);
+
+
+    // Assume the content (link name) can always fit into one block
+    if (strlen(content) < EXT2_BLOCK_SIZE) {
+        inode->i_blocks = 2;
+        inode->i_block[0] = find_free_block_num(disk);
+        increase_free_blocks_count(sb, gd, -1);
+        set_bitmap_val(block_bitmap, inode->i_block[0]-1, 1);
+
+        unsigned char* data_block = get_block(disk, inode->i_block[0]);
+        strcpy((char*) data_block, content);
+    } else {
+        // throw error if the file path is too long
+        exit(ENAMETOOLONG);
+    }
+
+}
+
+//endregion

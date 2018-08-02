@@ -4,7 +4,7 @@
 
 // TODO PRINTF SHOULD BE FPRINTF ON STDERR
 
-int ext2_ln(unsigned char* disk, char* source, char* dest, bool sym_link) {
+int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
 
     int ret = 0;
 
@@ -19,7 +19,6 @@ int ext2_ln(unsigned char* disk, char* source, char* dest, bool sym_link) {
         printf("No such file\n");
         ret = ENOENT;
     }
-
     // Abort if source is a directory
     else if (is_directory(src_entry)){
         printf("%s is a directory\n", source);
@@ -39,15 +38,47 @@ int ext2_ln(unsigned char* disk, char* source, char* dest, bool sym_link) {
     }
 
     // Abort if destination's parent does not exist
-    listPop(dst_components);
-    struct ext2_dir_entry_2* dst_parent = traverse_path(disk, dst_components);
-    if (dst_parent == NULL){
+    char* dst_file_name = listPop(dst_components);
+    struct ext2_dir_entry_2* dst_parent_entry = traverse_path(disk, dst_components);
+    if (dst_parent_entry == NULL){
         printf("Parent of %s does not exist\n", dest);
         ret = EEXIST;
     }
 
+    // find the free directory entry in the destination directory
+    struct ext2_inode* dst_inode = get_inode_from_entry(disk, dst_parent_entry);
+    struct ext2_dir_entry_2* new_de = find_free_directory_entry(disk, dst_inode, dst_file_name);
 
-    // Execute the algorithm
+    if (is_sym_link) {
+        // Soft link
+        one_index sym_inode_idx = find_free_inode_num(disk);
+
+        // create a new inode with sym link type at a free inode index
+        struct ext2_inode* sym_node = create_sym_inode(disk, sym_inode_idx, source);
+
+        // copy the source path into new sym inode's data blocks
+        write_str_to_new_inode(disk, sym_node, source);
+
+        new_de->inode = sym_inode_idx + 1;
+        new_de->file_type = EXT2_FT_SYMLINK;
+        new_de->name_len = (unsigned char) strlen(dst_file_name);
+        strncpy(new_de->name, dst_file_name, new_de->name_len);
+
+        ret = 0;
+    } else {
+        // Hard link
+        new_de->inode = src_entry->inode + 1;
+        new_de->file_type = EXT2_FT_REG_FILE;
+        new_de->name_len = (unsigned char) strlen(dst_file_name);
+        strncpy(new_de->name, dst_file_name, new_de->name_len);
+        // increase source file's link count
+        get_inode_from_entry(disk, src_entry)->i_links_count++;
+
+        ret = 0;
+    }
+
+
+
     // Free all lists
     destroyList(src_components);
     destroyList(dst_components);
@@ -61,7 +92,7 @@ int main(int argc, char* argv[]) {
     char* img = argv[1];
     char* source;
     char* dest;
-    bool sym_link = false;
+    bool is_sym_link = false;
     int ch = 0;
 
     char err_msg[100];
@@ -86,7 +117,7 @@ int main(int argc, char* argv[]) {
         switch(ch) {
             case 's':
                 // option to print everything
-                sym_link = true;
+                is_sym_link = true;
                 fprintf(stderr, "I got symlink\n");
                 break;
             default:
@@ -104,5 +135,5 @@ int main(int argc, char* argv[]) {
 
     unsigned char* disk = load_disk_to_mem(file_descriptor);
 
-    ext2_ln(disk, source, dest, sym_link);
+    ext2_ln(disk, source, dest, is_sym_link);
 }
