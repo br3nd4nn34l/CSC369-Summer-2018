@@ -117,11 +117,11 @@ struct ext2_dir_entry_2* get_next_dir_entry(struct ext2_dir_entry_2* entry) {
 one_index get_inode_block_number(unsigned char* disk, struct ext2_inode* inode, zero_index index) {
 
     // Return direct block number
-    if (0 <= index && index < INDIRECT1_INDEX) {
+    if (index < INDIRECT1_INDEX) {
         return inode->i_block[index];
     }
 
-        // Return indirect block number
+    // Return indirect block number
     else if (INDIRECT1_INDEX <= index && index < INODE_BLOCK_LIMIT) {
 
         // Get the block number (abort if 0)
@@ -144,7 +144,7 @@ one_index get_inode_block_number(unsigned char* disk, struct ext2_inode* inode, 
 void set_inode_block_number(unsigned char* disk, struct ext2_inode* inode, zero_index index, one_index block_num) {
 
     // Set direct block number
-    if (0 <= index && index < INDIRECT1_INDEX) {
+    if (index < INDIRECT1_INDEX) {
         inode->i_block[index] = block_num;
     }
 
@@ -184,11 +184,14 @@ bool is_link(struct ext2_dir_entry_2* dir) {
            dir->file_type == EXT2_FT_SYMLINK;
 }
 
-bool is_valid_dir_entry(struct ext2_dir_entry_2* start, struct ext2_dir_entry_2* current) {
-
+bool is_entry_in_block(struct ext2_dir_entry_2* start, struct ext2_dir_entry_2* current){
     unsigned long distance = ((char*) current) - ((char*) start);
 
-    return (distance < EXT2_BLOCK_SIZE) &&
+    return (distance < EXT2_BLOCK_SIZE);
+}
+
+bool is_valid_dir_entry(struct ext2_dir_entry_2* start, struct ext2_dir_entry_2* current) {
+    return is_entry_in_block(start, current) &&
            (current->rec_len > 0);
 }
 
@@ -266,7 +269,7 @@ one_index find_free_block_num(unsigned char* disk) {
         }
     }
 
-    if (i == super_block->s_inodes_count) {
+    if (i == super_block->s_blocks_count) {
         fprintf(stderr, "All data blocks are used.\n");
         exit(1);
     }
@@ -348,7 +351,7 @@ struct ext2_dir_entry_2* block_matching_entry(struct ext2_dir_entry_2* start, ch
 }
 
 // TODO SWAP OLD VERSION OUT WITH THIS
-ext2_dir_entry_pair* find_matching_pair_new(unsigned char* disk, struct ext2_inode* inode, char* name) {
+ext2_dir_entry_pair* find_matching_pair(unsigned char* disk, struct ext2_inode* inode, char* name) {
     if (name == NULL) return NULL;
 
     // Look for block with matching directory
@@ -372,7 +375,7 @@ ext2_dir_entry_pair* find_matching_pair_new(unsigned char* disk, struct ext2_ino
 }
 
 // Finds the directory entry pair in inode where cur's name is name
-ext2_dir_entry_pair* find_matching_pair(unsigned char* disk, struct ext2_inode* inode, char* name) {
+ext2_dir_entry_pair* find_matching_pair_old(unsigned char* disk, struct ext2_inode* inode, char* name) {
 
     if (name == NULL) return NULL;
 
@@ -494,7 +497,7 @@ void print_block_contents(struct ext2_dir_entry_2* start, bool show_dots) {
 }
 
 // TODO SWAP OLD VERSION OUT WITH THIS
-void print_dir_contents_new(unsigned char* disk, struct ext2_dir_entry_2* entry, bool show_dots) {
+void print_dir_contents(unsigned char* disk, struct ext2_dir_entry_2* entry, bool show_dots) {
 
     struct ext2_inode* inode = get_inode_from_entry(disk, entry);
 
@@ -513,7 +516,7 @@ void print_dir_contents_new(unsigned char* disk, struct ext2_dir_entry_2* entry,
     }
 }
 
-void print_dir_contents(unsigned char* disk, struct ext2_dir_entry_2* entry, bool show_dots) {
+void print_dir_contents_old(unsigned char* disk, struct ext2_dir_entry_2* entry, bool show_dots) {
 
     struct ext2_inode* inode = get_inode_from_entry(disk, entry);
 
@@ -557,7 +560,7 @@ void print_dir_contents(unsigned char* disk, struct ext2_dir_entry_2* entry, boo
 //region Freeing
 
 // TODO SWAP OLD VERSION OUT WITH THIS
-void free_file_inode_new(unsigned char* disk, struct ext2_dir_entry_2* entry) {
+void free_file_inode(unsigned char* disk, struct ext2_dir_entry_2* entry) {
 
     struct ext2_inode* inode = get_inode_from_entry(disk, entry);
     unsigned char* inode_bitmap = get_inode_bitmap(disk);
@@ -584,7 +587,7 @@ void free_file_inode_new(unsigned char* disk, struct ext2_dir_entry_2* entry) {
 
 }
 
-void free_file_inode(unsigned char* disk, struct ext2_dir_entry_2* entry) {
+void free_file_inode_old(unsigned char* disk, struct ext2_dir_entry_2* entry) {
 
     struct ext2_inode* inode = get_inode_from_entry(disk, entry);
     unsigned char* inode_bitmap = get_inode_bitmap(disk);
@@ -631,7 +634,7 @@ void free_file_inode(unsigned char* disk, struct ext2_dir_entry_2* entry) {
 }
 
 // TODO SWAP OLD VERSION OUT WITH THIS
-void free_parent_inode_block_new(unsigned char* disk, struct ext2_dir_entry_2* parent_entry, char* name) {
+void free_parent_inode_block(unsigned char* disk, struct ext2_dir_entry_2* parent_entry, char* name) {
     struct ext2_inode* parent_inode = get_inode(disk, parent_entry->inode - 1);
     struct ext2_super_block* sb = get_super_block(disk);
     struct ext2_group_desc* gd = get_group_descriptor(disk);
@@ -673,7 +676,7 @@ void free_parent_inode_block_new(unsigned char* disk, struct ext2_dir_entry_2* p
     }
 }
 
-void free_parent_inode_block(unsigned char* disk, struct ext2_dir_entry_2* parent_entry, char* name) {
+void free_parent_inode_block_old(unsigned char* disk, struct ext2_dir_entry_2* parent_entry, char* name) {
     struct ext2_inode* parent_inode = get_inode(disk, parent_entry->inode - 1);
     struct ext2_super_block* sb = get_super_block(disk);
     struct ext2_group_desc* gd = get_group_descriptor(disk);
@@ -762,17 +765,30 @@ void free_parent_inode_block(unsigned char* disk, struct ext2_dir_entry_2* paren
     return;
 }
 
-// Calculates the number of bits needed for a directory entry
-size_t total_entry_length(char* name) {
-    return 8 + strlen(name);
+// Calculates the number of bytes needed for a directory entry
+unsigned short total_entry_length(unsigned char name_len) {
+
+    size_t raw_length = sizeof(unsigned int) +
+            sizeof(unsigned short) +
+            2 * sizeof(unsigned char) +
+            name_len * sizeof(char);
+
+    size_t padding = 4 - (raw_length % 4);
+
+    return (unsigned short) (raw_length + padding);
+}
+
+// Calculates the minimum rec_len for a directory entry
+unsigned short min_rec_len(struct ext2_dir_entry_2* entry){
+    return total_entry_length(entry->name_len);
 }
 
 // Attempts to make a directory entry in the same block as start
 // Returns NULL if unsuccessful
-struct ext2_dir_entry_2* make_entry_within_block(struct ext2_dir_entry_2* start,
-                                                 one_index inode_number,
-                                                 char* name,
-                                                 unsigned char file_type) {
+struct ext2_dir_entry_2* make_entry_in_existing_block(struct ext2_dir_entry_2* start,
+                                                      one_index inode_number,
+                                                      char* name,
+                                                      unsigned char file_type) {
 
     // ASSUME:
     // NAME IS NON-NULL,
@@ -780,28 +796,30 @@ struct ext2_dir_entry_2* make_entry_within_block(struct ext2_dir_entry_2* start,
     // ENTRY DOES NOT EXIST ALREADY
 
     // Try to find an entry with enough succeeding empty space to fit the new entry
-    size_t name_len = strlen(name);
-    size_t space_needed = total_entry_length(name);
+    unsigned char name_len = (unsigned char) strlen(name);
+    unsigned short space_needed = total_entry_length(name_len);
+
     for (struct ext2_dir_entry_2* cur = start; is_valid_dir_entry(start, cur); cur = get_next_dir_entry(cur)) {
 
-        unsigned char space_left = (unsigned char) (cur->rec_len - cur->name_len);
-
+        unsigned short cur_min_rec_len = min_rec_len(cur);
+        unsigned short space_left = (unsigned short) (cur->rec_len - cur_min_rec_len);
+        // TODO THIS UPDATE MAY NOT BE CORRECT
         if (space_left >= space_needed) {
 
             // Look at the entry right after cur's name, abort if it's out of bounds
-            struct ext2_dir_entry_2* ret = get_shifted_dir_entry(cur, cur->name_len);
-            if (!is_valid_dir_entry(start, ret)) {
+            struct ext2_dir_entry_2* ret = get_shifted_dir_entry(cur, cur_min_rec_len);
+            if (!is_entry_in_block(start, ret)) {
                 return NULL;
             }
 
             // Cut cur off at the end of it's name
             unsigned short old_rec_len = cur->rec_len;
-            cur->rec_len = cur->name_len;
+            cur->rec_len = cur_min_rec_len;
 
             // Fill in the fields for the new entry
             strncpy(ret->name, name, name_len);
-            ret->name_len = (unsigned char) name_len;
-            ret->rec_len = old_rec_len - ret->name_len;
+            ret->name_len = name_len;
+            ret->rec_len = old_rec_len - cur->rec_len;
             ret->file_type = file_type;
             ret->inode = inode_number;
 
@@ -814,16 +832,13 @@ struct ext2_dir_entry_2* make_entry_within_block(struct ext2_dir_entry_2* start,
 }
 
 
-struct ext2_dir_entry_2* make_entry_within_inode(unsigned char* disk,
-                                                 struct ext2_inode* inode,
-                                                 one_index child_inode,
-                                                 char* name,
-                                                 unsigned char file_type) {
-
-    // TODO ABORT IN EDGE CASES
+struct ext2_dir_entry_2* make_entry_in_inode(unsigned char* disk,
+                                             struct ext2_inode* inode,
+                                             one_index child_inode,
+                                             char* name,
+                                             unsigned char file_type) {
 
     // See if we can squeeze the entry into the existing blocks of the inode
-    struct ext2_dir_entry_2* new_entry = NULL;
     for (zero_index i = 0; i < INODE_BLOCK_LIMIT; i++){
 
         // Get the block number, skip if it doesn't exist
@@ -832,144 +847,47 @@ struct ext2_dir_entry_2* make_entry_within_inode(unsigned char* disk,
             continue;
         }
 
-        // Try to make an entry within the given block
+        // Try to make an entry within the given block, return it if possible
         struct ext2_dir_entry_2* start = (struct ext2_dir_entry_2*) get_block(disk, block_num);
-        struct ext2_dir_entry_2* attempt = make_entry_within_block(start, child_inode, name, file_type);
+        struct ext2_dir_entry_2* attempt = make_entry_in_existing_block(start, child_inode, name, file_type);
         if (attempt != NULL){
-            new_entry = attempt;
-            break;
+            return attempt;
         }
     }
-
-    // Return what we just made if we can
-    if (new_entry != NULL) return new_entry;
 
     // Otherwise look for the first free block number that we can use
     for (zero_index i = 0; i < INODE_BLOCK_LIMIT; i++){
 
+        // Skip existing block numbers
+        if (get_inode_block_number(disk, inode, i) != 0) continue;
+
+
+        // Need to allocate a block to store the directory entry
+        struct ext2_super_block* super_block = get_super_block(disk);
+        struct ext2_group_desc* group_descriptor = get_group_descriptor(disk);
+
+        one_index new_block = find_free_block_num(disk);
+        set_bitmap_val(get_block_bitmap(disk), new_block - 1, 1);
+        increase_free_blocks_count(super_block, group_descriptor, -1);
+        inode->i_blocks += 2;
+        set_inode_block_number(disk, inode, i, new_block);
+
+        size_t name_len = strlen(name);
+
+        struct ext2_dir_entry_2* ret = (struct ext2_dir_entry_2*) get_block(disk, new_block);
+        ret->inode = child_inode;
+        strncpy(ret->name, name, name_len);
+        ret->name_len = (unsigned char) name_len;
+        ret->rec_len = EXT2_BLOCK_SIZE;
+
+        return ret;
     }
 
-
-}
-
-// TODO SWAP OLD VERSION OUT WITH THIS
-struct ext2_dir_entry_2* find_free_directory_entry_new(unsigned char* disk, struct ext2_inode* inode, char* name) {
-
-
-
-    // look through direct blocks
-    one_index block_num = 1; // will be the last used block in this inode
-    int i; // will be the first unused block in this inode
-    for (i = 0; block_num != 0; i++) {
-        block_num = inode->i_block[i];
-    }
-
-    struct ext2_dir_entry_2* new_de;
-    int required_size = 8 + (int) strlen(name);
-    if (i <= 11) {
-        // there are unused block in direct blocks
-        struct ext2_dir_entry_2* last_used_entry = (struct ext2_dir_entry_2*) get_block(disk, block_num);
-
-        int total_used_rec_len = 0;
-
-        while (total_used_rec_len < EXT2_BLOCK_SIZE) {
-            total_used_rec_len += last_used_entry->rec_len;
-            last_used_entry = get_next_dir_entry(last_used_entry);
-        }
-
-        // size of an entry is 8 + name length
-        int last_used_entry_size = sizeof(last_used_entry) + last_used_entry->name_len;
-        int rounding = 4 - (last_used_entry_size % 4);
-        total_used_rec_len += last_used_entry_size + rounding;
-        int space_left_in_block = EXT2_BLOCK_SIZE - total_used_rec_len;
-
-        if (space_left_in_block < required_size) {
-            // not enough space to insert the file name
-            struct ext2_super_block* sb = get_super_block(disk);
-            struct ext2_group_desc* gd = get_group_descriptor(disk);
-
-            one_index new_block = find_free_block_num(disk);
-            set_bitmap_val(get_block_bitmap(disk), new_block - 1, 1);
-            increase_free_blocks_count(sb, gd, -1);
-            inode->i_blocks += 2;
-            inode->i_block[i] = new_block;
-            new_de = make_directory_entry(disk, block_num, 0);
-            new_de->rec_len = EXT2_BLOCK_SIZE;
-        } else {
-            // enough space to insert the file name
-            last_used_entry->rec_len = (unsigned short) (last_used_entry_size + rounding);
-            new_de = make_directory_entry(disk, block_num, total_used_rec_len);
-            new_de->rec_len = (unsigned short) (EXT2_BLOCK_SIZE - total_used_rec_len);
-        }
-
-        return new_de;
-
-    } else if (i == 12) {
-        // have to look through indirect blocks
-        // TODO look at through pointer blocks
-        return NULL;
-    }
-
+    // Couldn't find any space, abort with NULL
     return NULL;
 }
 
-struct ext2_dir_entry_2* find_free_directory_entry(unsigned char* disk, struct ext2_inode* inode, char* file_name) {
 
-    // look through direct blocks
-    one_index block_num = 1; // will be the last used block in this inode
-    int i; // will be the first unused block in this inode
-    for (i = 0; block_num != 0; i++) {
-        block_num = inode->i_block[i];
-    }
-
-    struct ext2_dir_entry_2* new_de;
-    int required_size = 8 + (int) strlen(file_name);
-    if (i <= 11) {
-        // there are unused block in direct blocks
-        struct ext2_dir_entry_2* last_used_entry = (struct ext2_dir_entry_2*) get_block(disk, block_num);
-
-        int total_used_rec_len = 0;
-
-        while (total_used_rec_len < EXT2_BLOCK_SIZE) {
-            total_used_rec_len += last_used_entry->rec_len;
-            last_used_entry = get_next_dir_entry(last_used_entry);
-        }
-
-        // size of an entry is 8 + name length
-        int last_used_entry_size = sizeof(last_used_entry) + last_used_entry->name_len;
-        int rounding = 4 - (last_used_entry_size % 4);
-        total_used_rec_len += last_used_entry_size + rounding;
-        int space_left_in_block = EXT2_BLOCK_SIZE - total_used_rec_len;
-
-        if (space_left_in_block < required_size) {
-            // not enough space to insert the file name
-            struct ext2_super_block* sb = get_super_block(disk);
-            struct ext2_group_desc* gd = get_group_descriptor(disk);
-
-            one_index new_block = find_free_block_num(disk);
-            set_bitmap_val(get_block_bitmap(disk), new_block - 1, 1);
-            increase_free_blocks_count(sb, gd, -1);
-            inode->i_blocks += 2;
-            inode->i_block[i] = new_block;
-            new_de = make_directory_entry(disk, block_num, 0);
-            new_de->rec_len = EXT2_BLOCK_SIZE;
-        } else {
-            // enough space to insert the file name
-            last_used_entry->rec_len = (unsigned short) (last_used_entry_size + rounding);
-            new_de = make_directory_entry(disk, block_num, total_used_rec_len);
-            new_de->rec_len = (unsigned short) (EXT2_BLOCK_SIZE - total_used_rec_len);
-        }
-
-        return new_de;
-
-    } else if (i == 12) {
-        // have to look through indirect blocks
-        // TODO look at through pointer blocks
-        return NULL;
-    }
-
-    return NULL;
-}
 //endregion
 
 //region System Utils
@@ -983,6 +901,39 @@ void crash_with_usage(char* err_msg) {
 
 //region Inodes and Datablocks
 
+void revert_inode(unsigned char* disk, one_index inode_index) {
+
+    struct ext2_super_block* sb = get_super_block(disk);
+    struct ext2_group_desc* gd = get_group_descriptor(disk);
+    unsigned char* inode_bitmap = get_inode_bitmap(disk);
+
+    increase_free_inodes_count(sb, gd, 1);
+    set_bitmap_val(inode_bitmap, inode_index - 1, 0);
+}
+
+
+struct ext2_inode* create_dir_inode(unsigned char* disk, one_index inode_index, char* source) {
+
+    struct ext2_super_block* sb = get_super_block(disk);
+    struct ext2_group_desc* gd = get_group_descriptor(disk);
+    unsigned char* inode_bitmap = get_inode_bitmap(disk);
+
+    increase_free_inodes_count(sb, gd, -1);
+    set_bitmap_val(inode_bitmap, inode_index - 1, 1);
+
+    struct ext2_inode* sym_inode = get_inode(disk, inode_index);
+
+    sym_inode->i_mode = EXT2_S_IFDIR;
+    sym_inode->i_size = EXT2_BLOCK_SIZE;
+    sym_inode->i_ctime = (unsigned int) time(0);
+    sym_inode->i_dtime = 0;
+    sym_inode->i_blocks = 0;
+    sym_inode->i_links_count = 2;
+
+    return sym_inode;
+}
+
+
 struct ext2_inode* create_sym_inode(unsigned char* disk, one_index inode_index, char* source) {
 
     struct ext2_super_block* sb = get_super_block(disk);
@@ -995,11 +946,11 @@ struct ext2_inode* create_sym_inode(unsigned char* disk, one_index inode_index, 
     struct ext2_inode* sym_inode = get_inode(disk, inode_index);
 
     sym_inode->i_mode = EXT2_S_IFLNK;
-    sym_inode->i_size = (unsigned int) strlen(source); //size is the same as src node
+    sym_inode->i_size = (unsigned int) strlen(source);
     sym_inode->i_ctime = (unsigned int) time(0);
     sym_inode->i_dtime = 0;
     sym_inode->i_blocks = 0;
-    sym_inode->i_links_count = 2; // Itself and from parent.
+    sym_inode->i_links_count = 2;
 
     return sym_inode;
 }

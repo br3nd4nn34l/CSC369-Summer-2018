@@ -2,48 +2,42 @@
 #include<fcntl.h>
 #include <getopt.h>
 
-// TODO PRINTF SHOULD BE FPRINTF ON STDERR
 
-int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
+int ext2_mkdir(unsigned char* disk, char* path) {
 
     int ret = 0;
 
-    List* src_components = split_path(source);
-    struct ext2_dir_entry_2* src_entry = traverse_path(disk, src_components);
+    // Split path into components, then get the last element
+    List* path_components = split_path(path);
+    char* new_dir = listPop(path_components);
+    struct ext2_dir_entry_2* parent_entry;
 
-    List* dst_components = split_path(dest);
-    struct ext2_dir_entry_2* dst_entry = traverse_path(disk, dst_components);
+    // Abort if we were only given "/"
+    if (path_components->count == 1){
+        fprintf(stderr, "/ already exists.\n");
+        ret = EEXIST;
+    }
 
-    // Abort if source file does not exist
-    if (src_entry == NULL) {
-        printf("No such file\n");
+    else if (((parent_entry = traverse_path(disk, path_components)) == NULL)) {
+        fprintf(stderr, "Ancestors of %s do not exist.\n", path);
         ret = ENOENT;
     }
-    // Abort if source is a directory
-    else if (is_directory(src_entry)){
-        printf("%s is a directory\n", source);
-        ret = EISDIR;
+
+    else if (!is_directory(parent_entry)){
+        fprintf(stderr, "Parent not a directory.\n");
+        ret = ENOENT;
     }
 
-    // Abort if destination is a directory
-    else if (is_directory(dst_entry)){
-        printf("%s is a directory\n", dest);
-        ret = EISDIR;
-    }
-
-    // Abort if destination entry already exists
-    else if (dst_entry != NULL){
-        printf("%s already exists.\n", dest);
+    // Restore the list to see if the directory already exists
+    listAppend(path_components, new_dir);
+    if (traverse_path(disk, path_components) != NULL){
+        fprintf(stderr, "%s already exists.\n", path);
         ret = EEXIST;
     }
 
-    // Abort if destination's parent does not exist
-    char* dst_file_name = listPop(dst_components);
-    struct ext2_dir_entry_2* dst_parent_entry = traverse_path(disk, dst_components);
-    if (dst_parent_entry == NULL){
-        printf("Parent of %s does not exist\n", dest);
-        ret = EEXIST;
-    }
+    // Get the parent inode,
+    struct ext2_inode* parent_inode = get_inode_from_entry(disk, parent_entry);
+
 
     // find the free directory entry in the destination directory
     struct ext2_inode* dst_parent_inode = get_inode_from_entry(disk, dst_parent_entry);
@@ -56,6 +50,8 @@ int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
 
         // create a new inode with sym link type at a free inode index
         struct ext2_inode* sym_node = create_sym_inode(disk, sym_inode_idx, source);
+
+
         // copy the source path into new sym inode's data blocks
         write_str_to_new_inode(disk, sym_node, source);
 
