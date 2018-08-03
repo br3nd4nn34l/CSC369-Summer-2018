@@ -31,11 +31,11 @@ int ext2_rm(unsigned char* disk, char* path) {
         listPop(path_components);
 
         struct ext2_dir_entry_2* parent_entry = traverse_path(disk, path_components);
-        free_parent_inode_block(disk, parent_entry, file_name);
+        delete_child_entry(disk, parent_entry, file_name);
 
         inode->i_links_count--;
         if (inode->i_links_count <= 0) {
-            free_file_inode(disk, entry);
+            free_inode(disk, entry->inode);
         }
 
         ret = 0;
@@ -55,14 +55,6 @@ int main(int argc, char* argv[]) {
     char* img = argv[1];
     char* path = argv[2];
 
-    int file_descriptor = open(img, O_RDWR);
-
-    // Opening disk
-    if (!file_descriptor) {
-        fprintf(stderr, "Disk image '%s' not found.", img);
-        exit(ENOENT);
-    }
-
-    unsigned char* disk = load_disk_to_mem(file_descriptor);
+    unsigned char* disk = load_disk_to_mem(img);
     ext2_rm(disk, path);
 }

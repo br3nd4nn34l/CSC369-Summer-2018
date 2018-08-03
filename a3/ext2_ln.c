@@ -6,8 +6,6 @@
 
 int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
 
-    int ret = 0;
-
     List* src_components = split_path(source);
     struct ext2_dir_entry_2* src_entry = traverse_path(disk, src_components);
 
@@ -16,33 +14,34 @@ int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
 
     // Abort if source file does not exist
     if (src_entry == NULL) {
-        printf("No such file\n");
-        ret = ENOENT;
+        fprintf(stderr, "No such file\n");
+        exit(ENOENT);
     }
+
     // Abort if source is a directory
     else if (is_directory(src_entry)){
-        printf("%s is a directory\n", source);
-        ret = EISDIR;
+        fprintf(stderr, "%s is a directory\n", source);
+        exit(EISDIR);
     }
 
     // Abort if destination is a directory
     else if (is_directory(dst_entry)){
-        printf("%s is a directory\n", dest);
-        ret = EISDIR;
+        fprintf(stderr, "%s is a directory\n", dest);
+        exit(EISDIR);
     }
 
     // Abort if destination entry already exists
     else if (dst_entry != NULL){
-        printf("%s already exists.\n", dest);
-        ret = EEXIST;
+        fprintf(stderr, "%s already exists.\n", dest);
+        exit(EEXIST);
     }
 
     // Abort if destination's parent does not exist
     char* dst_file_name = listPop(dst_components);
     struct ext2_dir_entry_2* dst_parent_entry = traverse_path(disk, dst_components);
     if (dst_parent_entry == NULL){
-        printf("Parent of %s does not exist\n", dest);
-        ret = EEXIST;
+        fprintf(stderr, "Parent of %s does not exist\n", dest);
+        exit(EEXIST);
     }
 
     // find the free directory entry in the destination directory
@@ -51,25 +50,23 @@ int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
     struct ext2_dir_entry_2* attempt;
     if (is_sym_link) {
 
-        // Soft link
-        one_index sym_inode_idx = find_free_inode_num(disk);
+        // Allocate a symbolic link inode, grab it and write the path inside of it
+        one_index sym_inode_num = allocate_link_inode(disk, source);
+        struct ext2_inode* sym_inode = get_inode(disk, sym_inode_num - 1);
+        write_str_to_new_inode(disk, sym_inode, source);
 
-        // create a new inode with sym link type at a free inode index
-        struct ext2_inode* sym_node = create_sym_inode(disk, sym_inode_idx, source);
-        // copy the source path into new sym inode's data blocks
-        write_str_to_new_inode(disk, sym_node, source);
-
+        // Attempt to find space for the new directory entry
         attempt = make_entry_in_inode(
                 disk,
                 dst_parent_inode,
-                sym_inode_idx,
+                sym_inode_num,
                 dst_file_name,
                 EXT2_FT_SYMLINK
         );
 
+        // If we can't fit the entry in anywhere, we need to undo the inode creation
         if (attempt == NULL) {
-            // cannot insert file name into parents' inode
-            revert_inode(disk, sym_inode_idx);
+            free_inode(disk, sym_inode_num);
         }
 
     } else {
@@ -84,12 +81,11 @@ int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
 
         // increase source file's link count
         get_inode_from_entry(disk, src_entry)->i_links_count++;
-
     }
 
     if (attempt == NULL) {
-        ret = 1;
         fprintf(stderr, "Failed to link.\n");
+        exit(1);
     }
 
 
@@ -97,8 +93,7 @@ int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
     destroyList(src_components);
     destroyList(dst_components);
 
-
-    return ret;
+    return 0;
 }
 
 
@@ -139,15 +134,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    int file_descriptor = open(img, O_RDWR);
-
-    // Opening disk
-    if (!file_descriptor) {
-        fprintf(stderr, "Disk image '%s' not found.", img);
-        exit(ENOENT);
-    }
-
-    unsigned char* disk = load_disk_to_mem(file_descriptor);
+    unsigned char* disk = load_disk_to_mem(img);
 
     ext2_ln(disk, source, dest, is_sym_link);
 }

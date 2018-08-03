@@ -39,62 +39,62 @@ int ext2_mkdir(unsigned char* disk, char* path) {
     struct ext2_inode* parent_inode = get_inode_from_entry(disk, parent_entry);
 
 
-    // find the free directory entry in the destination directory
-    struct ext2_inode* dst_parent_inode = get_inode_from_entry(disk, dst_parent_entry);
-
-    struct ext2_dir_entry_2* attempt;
-    if (is_sym_link) {
-
-        // Soft link
-        one_index sym_inode_idx = find_free_inode_num(disk);
-
-        // create a new inode with sym link type at a free inode index
-        struct ext2_inode* sym_node = create_sym_inode(disk, sym_inode_idx, source);
-
-
-        // copy the source path into new sym inode's data blocks
-        write_str_to_new_inode(disk, sym_node, source);
-
-        attempt = make_entry_in_inode(
-                disk,
-                dst_parent_inode,
-                sym_inode_idx,
-                dst_file_name,
-                EXT2_FT_SYMLINK
-        );
-
-        if (attempt == NULL) {
-            // cannot insert file name into parents' inode
-            revert_inode(disk, sym_inode_idx);
-        }
-
-    } else {
-        // Hard link
-        attempt = make_entry_in_inode(
-                disk,
-                dst_parent_inode,
-                src_entry->inode,
-                dst_file_name,
-                EXT2_FT_REG_FILE
-        );
-
-        // increase source file's link count
-        get_inode_from_entry(disk, src_entry)->i_links_count++;
-
-    }
-
-    if (attempt == NULL) {
-        ret = 1;
-        fprintf(stderr, "Failed to link.\n");
-    }
-
-
-    // Free all lists
-    destroyList(src_components);
-    destroyList(dst_components);
-
-
-    return ret;
+//    // find the free directory entry in the destination directory
+//    struct ext2_inode* dst_parent_inode = get_inode_from_entry(disk, dst_parent_entry);
+//
+//    struct ext2_dir_entry_2* attempt;
+//    if (is_sym_link) {
+//
+//        // Soft link
+//        one_index sym_inode_idx = find_free_inode_num(disk);
+//
+//        // create a new inode with sym link type at a free inode index
+//        struct ext2_inode* sym_node = allocate_link_inode(disk, sym_inode_idx, source);
+//
+//
+//        // copy the source path into new sym inode's data blocks
+//        write_str_to_new_inode(disk, sym_node, source);
+//
+//        attempt = make_entry_in_inode(
+//                disk,
+//                dst_parent_inode,
+//                sym_inode_idx,
+//                dst_file_name,
+//                EXT2_FT_SYMLINK
+//        );
+//
+//        if (attempt == NULL) {
+//            // cannot insert file name into parents' inode
+//            revert_inode(disk, sym_inode_idx);
+//        }
+//
+//    } else {
+//        // Hard link
+//        attempt = make_entry_in_inode(
+//                disk,
+//                dst_parent_inode,
+//                src_entry->inode,
+//                dst_file_name,
+//                EXT2_FT_REG_FILE
+//        );
+//
+//        // increase source file's link count
+//        get_inode_from_entry(disk, src_entry)->i_links_count++;
+//
+//    }
+//
+//    if (attempt == NULL) {
+//        ret = 1;
+//        fprintf(stderr, "Failed to link.\n");
+//    }
+//
+//
+//    // Free all lists
+//    destroyList(src_components);
+//    destroyList(dst_components);
+//
+//
+//    return ret;
 }
 
 
@@ -135,15 +135,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    int file_descriptor = open(img, O_RDWR);
+    unsigned char* disk = load_disk_to_mem(img);
 
-    // Opening disk
-    if (!file_descriptor) {
-        fprintf(stderr, "Disk image '%s' not found.", img);
-        exit(ENOENT);
-    }
-
-    unsigned char* disk = load_disk_to_mem(file_descriptor);
-
-    ext2_ln(disk, source, dest, is_sym_link);
+    ext2_mkdir(disk, dest);
 }
