@@ -52,8 +52,8 @@ int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
 
         // Allocate a symbolic link inode, grab it and write the path inside of it
         one_index sym_inode_num = allocate_link_inode(disk, source);
-        struct ext2_inode* sym_inode = get_inode(disk, sym_inode_num - 1);
-        write_str_to_new_inode(disk, sym_inode, source);
+        struct ext2_inode* sym_inode = get_inode(disk, sym_inode_num);
+        write_path_to_symlink_inode(disk, sym_inode, source);
 
         // Attempt to find space for the new directory entry
         attempt = make_entry_in_inode(
@@ -127,7 +127,6 @@ int main(int argc, char* argv[]) {
             case 's':
                 // option to print everything
                 is_sym_link = true;
-                fprintf(stderr, "I got symlink\n");
                 break;
             default:
                 crash_with_usage(err_msg);

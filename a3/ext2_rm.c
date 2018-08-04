@@ -14,20 +14,19 @@ int ext2_rm(unsigned char* disk, char* path) {
 
     // Abort if we cannot find the entry
     if (entry == NULL) {
-        printf("%s\n", "No such file or directory");
-        ret = ENOENT;
+        fprintf(stderr, "%s\n", "No such file or directory");
+        exit(ENOENT);
     }
 
     // Abort if entry is a directory
     else if (is_directory(entry)){
-        printf("%s\n", "Path is a directory");
-        ret = EISDIR;
+        fprintf(stderr, "%s is a directory\n", path);
+        exit(EISDIR);
     }
 
     // Delete file or link
     else {
         // get parent diretory's entry
-//        path_components->count--;
         listPop(path_components);
 
         struct ext2_dir_entry_2* parent_entry = traverse_path(disk, path_components);
@@ -37,7 +36,6 @@ int ext2_rm(unsigned char* disk, char* path) {
         if (inode->i_links_count <= 0) {
             free_inode(disk, entry->inode);
         }
-
         ret = 0;
     }
 

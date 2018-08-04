@@ -93,20 +93,20 @@ struct ext2_inode* get_inode_table(unsigned char* disk) {
     return (struct ext2_inode*) get_block(disk, group_desc->bg_inode_table);
 }
 
-struct ext2_inode* get_inode(unsigned char* disk, zero_index inode_ind) {
-    return &get_inode_table(disk)[inode_ind];
+struct ext2_inode* get_inode(unsigned char* disk, one_index inode_num) {
+    return &get_inode_table(disk)[inode_num - 1];
 }
 
 struct ext2_inode* get_root_inode(unsigned char* disk) {
-    // Handout specifies that root inode is at index 1
-    return get_inode(disk, 1);
+    // Handout specifies that root inode is inode 2
+    return get_inode(disk, 2);
 }
 
 struct ext2_inode* get_inode_from_entry(unsigned char* disk, struct ext2_dir_entry_2* entry) {
     if (entry == NULL) {
         return NULL;
     }
-    return get_inode(disk, entry->inode - 1);
+    return get_inode(disk, entry->inode);
 }
 
 // Returns a pointer to the directory entry that is shift bytes after entry
@@ -421,13 +421,19 @@ one_index* allocate_blocks(unsigned char* disk, unsigned int num_blocks) {
     // Decrement number of free blocks, grab all free block numbers
     increase_free_blocks_count(disk, -num_blocks);
 
-    // Gather up all free block numbers, indicating as such in the bitmap
+    // Gather up all free block numbers
     one_index* ret = malloc(sizeof(one_index) * num_blocks);
     zero_index cur_ind = 0;
     for (one_index block_num = LAST_RESERVED_BLOCK + 1; cur_ind < num_blocks; block_num++) {
         if (!get_block_usage(disk, block_num)) {
+
+            // Insert the block into the array, mark usage in bitmap
             ret[cur_ind] = block_num;
             set_block_usage(disk, block_num, 1);
+
+            memset(get_block(disk, block_num), 0, EXT2_BLOCK_SIZE);
+
+            // Move to the next index for the next insertion
             cur_ind++;
         }
     }
@@ -467,6 +473,13 @@ one_index allocate_inode(unsigned char* disk) {
         // Mark the inode as used, return the number
         if (!get_inode_usage(disk, inode_num)) {
             set_inode_usage(disk, inode_num, 1);
+
+            // Grab the inode and zero out all the data block numbers
+            struct ext2_inode* inode = get_inode(disk, inode_num);
+            for (zero_index i = 0; i < INODE_BLOCK_LIMIT; i++){
+                set_inode_block_number(disk, inode, i, 0);
+            }
+
             return inode_num;
         }
     }
@@ -482,7 +495,7 @@ void free_block(unsigned char* disk, one_index block_num) {
 
 // Frees an inode and zeroes out its associated data blocks on disk
 void free_inode(unsigned char* disk, one_index inode_num) {
-    struct ext2_inode* inode = get_inode(disk, inode_num - 1);
+    struct ext2_inode* inode = get_inode(disk, inode_num);
 
     inode->i_dtime = (unsigned int) time(0);
     increase_free_inodes_count(disk, 1);
@@ -493,13 +506,14 @@ void free_inode(unsigned char* disk, one_index inode_num) {
         one_index block_num = get_inode_block_number(disk, inode, i);
         if (block_num == 0) continue;
         free_block(disk, block_num);
+        set_inode_block_number(disk, inode, i, 0);
     }
 }
 
 // Deletes the directory entry of parent_entry with name equal to name
 void delete_child_entry(unsigned char* disk, struct ext2_dir_entry_2* parent_entry, char* name) {
 
-    struct ext2_inode* parent_inode = get_inode(disk, parent_entry->inode - 1);
+    struct ext2_inode* parent_inode = get_inode(disk, parent_entry->inode);
 
     for (zero_index i = 0; i < INODE_BLOCK_LIMIT; i++) {
 
@@ -636,7 +650,7 @@ one_index allocate_block_on_inode(unsigned char* disk, struct ext2_inode* inode,
 // Returns NULL if all inode is completely occupied
 struct ext2_dir_entry_2* make_entry_in_inode(unsigned char* disk,
                                              struct ext2_inode* inode,
-                                             one_index child_inode,
+                                             one_index child_inode_num,
                                              char* name,
                                              unsigned char file_type) {
 
@@ -651,7 +665,7 @@ struct ext2_dir_entry_2* make_entry_in_inode(unsigned char* disk,
 
         // Try to make an entry within the given block, return it if possible
         struct ext2_dir_entry_2* start = (struct ext2_dir_entry_2*) get_block(disk, block_num);
-        struct ext2_dir_entry_2* attempt = make_entry_in_existing_block(start, child_inode, name, file_type);
+        struct ext2_dir_entry_2* attempt = make_entry_in_existing_block(start, child_inode_num, name, file_type);
         if (attempt != NULL) {
             return attempt;
         }
@@ -668,14 +682,15 @@ struct ext2_dir_entry_2* make_entry_in_inode(unsigned char* disk,
         }
 
         // Get the first entry of the new block
-        struct ext2_dir_entry_2* start = (struct ext2_dir_entry_2*) get_block(disk, i);
+        struct ext2_dir_entry_2* start = (struct ext2_dir_entry_2*) get_block(disk, block_num);
 
-        // Fill in various information to complete the entry
+        // Fill in various information to complete   the entry
         size_t name_len = strlen(name);
-        start->inode = child_inode;
+        start->inode = child_inode_num;
         strncpy(start->name, name, name_len);
         start->name_len = (unsigned char) name_len;
         start->rec_len = EXT2_BLOCK_SIZE;
+        start->file_type = file_type;
 
         return start;
     }
@@ -686,17 +701,20 @@ struct ext2_dir_entry_2* make_entry_in_inode(unsigned char* disk,
 one_index allocate_dir_inode(unsigned char* disk) {
 
     // Allocate the inode and grab it
-    one_index inode_num = allocate_inode(disk);
-    struct ext2_inode* dir_inode = get_inode(disk, inode_num);
+    one_index dir_inode_num = allocate_inode(disk);
+    struct ext2_inode* dir_inode = get_inode(disk, dir_inode_num);
 
     dir_inode->i_mode = EXT2_S_IFDIR;
     dir_inode->i_size = EXT2_BLOCK_SIZE;
     dir_inode->i_ctime = (unsigned int) time(0);
     dir_inode->i_dtime = 0;
     dir_inode->i_blocks = 0;
-    dir_inode->i_links_count = 2;
+    dir_inode->i_links_count = 1;
 
-    return inode_num;
+    // Increment number of used directories
+    get_group_descriptor(disk)->bg_used_dirs_count++;
+
+    return dir_inode_num;
 }
 
 // Allocates an inode for a symlink and returns the number of the inode
@@ -711,12 +729,12 @@ one_index allocate_link_inode(unsigned char* disk, char* source) {
     sym_inode->i_ctime = (unsigned int) time(0);
     sym_inode->i_dtime = 0;
     sym_inode->i_blocks = 0;
-    sym_inode->i_links_count = 2;
+    sym_inode->i_links_count = 1;
 
     return inode_num;
 }
 
-void write_str_to_new_inode(unsigned char* disk, struct ext2_inode* inode, char* content) {
+void write_path_to_symlink_inode(unsigned char* disk, struct ext2_inode* inode, char* content) {
 
     // Assume the content (link name) can always fit into one block
     if (strlen(content) < EXT2_BLOCK_SIZE) {
@@ -757,7 +775,7 @@ one_index allocate_duplicate_inode(unsigned char* disk, struct ext2_inode* sourc
     one_index* new_block_nums = allocate_blocks(disk, num_non_zero);
 
     // Go through the new inode and set it up
-    struct ext2_inode* dest = get_inode(disk, dst_inode_num - 1);
+    struct ext2_inode* dest = get_inode(disk, dst_inode_num);
 
     // Copy the layout of the blocks in source
     zero_index cur_ind = 0;
