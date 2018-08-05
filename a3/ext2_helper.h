@@ -126,12 +126,12 @@ struct ext2_dir_entry_2* get_next_dir_entry(struct ext2_dir_entry_2* entry) {
 one_index get_inode_block_number(unsigned char* disk, struct ext2_inode* inode, zero_index index) {
 
     // Return direct block number
-    if (index < INDIRECT1_INDEX) {
+    if (index <= INDIRECT1_INDEX) {
         return inode->i_block[index];
     }
 
         // Return indirect block number
-    else if (INDIRECT1_INDEX <= index && index < INODE_BLOCK_LIMIT) {
+    else if (INDIRECT1_INDEX < index && index < INODE_BLOCK_LIMIT) {
 
         // Get the block number (abort if 0)
         one_index indir_block_num = inode->i_block[INDIRECT1_INDEX];
@@ -141,7 +141,7 @@ one_index get_inode_block_number(unsigned char* disk, struct ext2_inode* inode, 
 
         // Get the block, then look at the index
         one_index* block = (one_index*) get_block(disk, indir_block_num);
-        zero_index shifted_ind = index - INDIRECT1_INDEX;
+        zero_index shifted_ind = index - INDIRECT1_INDEX - 1;
 
         return block[shifted_ind];
     }
@@ -154,12 +154,12 @@ one_index get_inode_block_number(unsigned char* disk, struct ext2_inode* inode, 
 void set_inode_block_number(unsigned char* disk, struct ext2_inode* inode, zero_index index, one_index block_num) {
 
     // Set direct block number
-    if (index < INDIRECT1_INDEX) {
+    if (index <= INDIRECT1_INDEX) {
         inode->i_block[index] = block_num;
     }
 
         // Set indirect block number
-    else if (INDIRECT1_INDEX <= index && index < INODE_BLOCK_LIMIT) {
+    else if (INDIRECT1_INDEX < index && index < INODE_BLOCK_LIMIT) {
 
         // Get the block number (abort if 0)
         one_index indir_block_num = inode->i_block[INDIRECT1_INDEX];
@@ -169,7 +169,7 @@ void set_inode_block_number(unsigned char* disk, struct ext2_inode* inode, zero_
 
         // Get the block, then set the index
         one_index* block = (one_index*) get_block(disk, indir_block_num);
-        zero_index shifted_ind = index - INDIRECT1_INDEX;
+        zero_index shifted_ind = index - INDIRECT1_INDEX - 1;
 
         block[shifted_ind] = block_num;
     }
@@ -426,7 +426,6 @@ one_index* allocate_blocks(unsigned char* disk, unsigned int num_blocks) {
     zero_index cur_ind = 0;
     for (one_index block_num = LAST_RESERVED_BLOCK + 1; cur_ind < num_blocks; block_num++) {
         if (!get_block_usage(disk, block_num)) {
-
             // Insert the block into the array, mark usage in bitmap
             ret[cur_ind] = block_num;
             set_block_usage(disk, block_num, 1);
@@ -498,15 +497,17 @@ void free_inode(unsigned char* disk, one_index inode_num) {
     struct ext2_inode* inode = get_inode(disk, inode_num);
 
     inode->i_dtime = (unsigned int) time(0);
+    inode->i_size = 0;
+    inode->i_blocks = 0;
     increase_free_inodes_count(disk, 1);
     set_inode_usage(disk, inode_num, 0);
 
     // Free all block numbers in the inode (skip absent block numbers)
-    for (int i = 0; i < INODE_BLOCK_LIMIT; i++) {
-        one_index block_num = get_inode_block_number(disk, inode, i);
+    for (int i = INODE_BLOCK_LIMIT - 1; i >= 0; i--) {
+        one_index block_num = get_inode_block_number(disk, inode, (zero_index) i);
         if (block_num == 0) continue;
         free_block(disk, block_num);
-        set_inode_block_number(disk, inode, i, 0);
+        set_inode_block_number(disk, inode, (zero_index) i, 0);
     }
 }
 
@@ -734,6 +735,23 @@ one_index allocate_link_inode(unsigned char* disk, char* source) {
     return inode_num;
 }
 
+// Allocates an inode for a symlink and returns the number of the inode
+one_index allocate_file_inode(unsigned char* disk, unsigned int size) {
+
+    // Allocate the inode and grab it
+    one_index inode_num = allocate_inode(disk);
+    struct ext2_inode* file_node = get_inode(disk, inode_num);
+
+    file_node->i_mode = EXT2_FT_REG_FILE;
+    file_node->i_size = size;
+    file_node->i_ctime = (unsigned int) time(0);
+    file_node->i_dtime = 0;
+    file_node->i_blocks = 0;
+    file_node->i_links_count = 1;
+
+    return inode_num;
+}
+
 void write_path_to_symlink_inode(unsigned char* disk, struct ext2_inode* inode, char* content) {
 
     // Assume the content (link name) can always fit into one block
@@ -750,68 +768,6 @@ void write_path_to_symlink_inode(unsigned char* disk, struct ext2_inode* inode, 
     }
 
 }
-
-// Count the number of non-zero data blocks in an inode
-unsigned int count_non_zero_blocks(unsigned char* disk, struct ext2_inode* inode){
-    unsigned int ret = 0;
-
-    for (zero_index i = 0; i < INODE_BLOCK_LIMIT; i++){
-        if(get_inode_block_number(disk, inode, i) != 0){
-            ret++;
-        }
-    }
-
-    return ret;
-}
-
-// Allocates an inode that is an exact duplicate of the given inode
-one_index allocate_duplicate_inode(unsigned char* disk, struct ext2_inode* source){
-
-    // Allocate a new inode
-    one_index dst_inode_num = allocate_inode(disk);
-
-    // Allocate as many non-zero blocks as the source has
-    unsigned int num_non_zero = count_non_zero_blocks(disk, source);
-    one_index* new_block_nums = allocate_blocks(disk, num_non_zero);
-
-    // Go through the new inode and set it up
-    struct ext2_inode* dest = get_inode(disk, dst_inode_num);
-
-    // Copy the layout of the blocks in source
-    zero_index cur_ind = 0;
-    for (zero_index i = 0; cur_ind < num_non_zero && i < INODE_BLOCK_LIMIT; i++) {
-        if (get_inode_block_number(disk, source, i) != 0) {
-            set_inode_block_number(disk, dest, i, new_block_nums[cur_ind]);
-            cur_ind++;
-        }
-    }
-
-    // No longer need the collection of new block numbers
-    free(new_block_nums);
-
-    // Transfer the contents of each source block to each destination block
-    for (zero_index i = 0; i < INODE_BLOCK_LIMIT; i++){
-
-        // Skip zeros (guaranteed to be same across both)
-        one_index src_num = get_inode_block_number(disk, source, i);
-        if (src_num == 0) continue;
-        one_index dst_num = get_inode_block_number(disk, source, i);
-
-        // Grab the blocks
-        unsigned char* src_block = get_block(disk, src_num);
-        unsigned char* dst_block = get_block(disk, dst_num);
-
-        // Copy everything into the destination block
-        strncpy((char*) dst_block, (char*) src_block, EXT2_BLOCK_SIZE);
-    }
-
-    // TODO SET UP THE ATTRIBUTES OF THE CLONED INODE
-
-    // Return the inode number of the cloned inode
-    return dst_inode_num;
-}
-
-
 
 //endregion
 

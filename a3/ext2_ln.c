@@ -2,7 +2,6 @@
 #include<fcntl.h>
 #include <getopt.h>
 
-// TODO PRINTF SHOULD BE FPRINTF ON STDERR
 
 int ext2_ln(unsigned char* disk, char* source, char* dest, bool is_sym_link) {
 

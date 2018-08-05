@@ -66,15 +66,14 @@ int ext2_mkdir(unsigned char* disk, char* path) {
 
 
 int main(int argc, char* argv[]) {
-    char* img = argv[1];
-    char* dir_path = argv[2];
-
 
     if (argc != 3) {
         fprintf(stderr, "Usage: %s [disk] [directory path]\n", argv[0]);
         exit(1);
     }
 
+    char* img = argv[1];
+    char* dir_path = argv[2];
 
     unsigned char* disk = load_disk_to_mem(img);
 
