@@ -126,12 +126,12 @@ struct ext2_dir_entry_2* get_next_dir_entry(struct ext2_dir_entry_2* entry) {
 one_index get_inode_block_number(unsigned char* disk, struct ext2_inode* inode, zero_index index) {
 
     // Return direct block number
-    if (index <= INDIRECT1_INDEX) {
+    if (index < INDIRECT1_INDEX) {
         return inode->i_block[index];
     }
 
         // Return indirect block number
-    else if (INDIRECT1_INDEX < index && index < INODE_BLOCK_LIMIT) {
+    else if (INDIRECT1_INDEX <= index && index < INODE_BLOCK_LIMIT) {
 
         // Get the block number (abort if 0)
         one_index indir_block_num = inode->i_block[INDIRECT1_INDEX];
@@ -141,7 +141,7 @@ one_index get_inode_block_number(unsigned char* disk, struct ext2_inode* inode, 
 
         // Get the block, then look at the index
         one_index* block = (one_index*) get_block(disk, indir_block_num);
-        zero_index shifted_ind = index - INDIRECT1_INDEX - 1;
+        zero_index shifted_ind = index - INDIRECT1_INDEX;
 
         return block[shifted_ind];
     }
@@ -154,12 +154,12 @@ one_index get_inode_block_number(unsigned char* disk, struct ext2_inode* inode, 
 void set_inode_block_number(unsigned char* disk, struct ext2_inode* inode, zero_index index, one_index block_num) {
 
     // Set direct block number
-    if (index <= INDIRECT1_INDEX) {
+    if (index < INDIRECT1_INDEX) {
         inode->i_block[index] = block_num;
     }
 
         // Set indirect block number
-    else if (INDIRECT1_INDEX < index && index < INODE_BLOCK_LIMIT) {
+    else if (INDIRECT1_INDEX <= index && index < INODE_BLOCK_LIMIT) {
 
         // Get the block number (abort if 0)
         one_index indir_block_num = inode->i_block[INDIRECT1_INDEX];
@@ -169,7 +169,7 @@ void set_inode_block_number(unsigned char* disk, struct ext2_inode* inode, zero_
 
         // Get the block, then set the index
         one_index* block = (one_index*) get_block(disk, indir_block_num);
-        zero_index shifted_ind = index - INDIRECT1_INDEX - 1;
+        zero_index shifted_ind = index - INDIRECT1_INDEX;
 
         block[shifted_ind] = block_num;
     }
